@@ -103,7 +103,7 @@ impl PluginBridge for DummyPluginBridge {
         // Lookup plugin by ID. Your implementation would likely be more complex
         match plugin_id {
             0 => Ok(dummy_plugin(properties)),
-            _ => Err(crate::WorldInfoError::ProcessorError("Invalid plugin id".to_string())),
+            _ => Err(WorldInfoError::PluginError("Invalid plugin id".to_string())),
         }
     }
 }
@@ -115,16 +115,16 @@ fn dummy_plugin_logic(properties: Value) -> Result<String, WorldInfoError> {
     match properties.get("items").and_then(Value::as_array) {
         Some(items) => {
             if items.is_empty() {
-                Err("Plugin Error: 'items' array is empty.".to_string())
+                Err(WorldInfoError::PluginError("Plugin Error: 'items' array is empty.".to_string()))
             } else {
                 let index = rand::thread_rng().gen_range(0..items.len());
                 match items[index].as_str() {
                     Some(item_str) => Ok(format!("The plugin's forecast is: {}", item_str)),
-                    None => Err(format!("Plugin Error: Item at index {} is not a string.", index)),
+                    None => Err(WorldInfoError::PluginError(format!("Plugin Error: Item at index {} is not a string.", index))),
                 }
             }
         },
-        None => Err("Plugin Error: Missing or invalid 'items' property.".to_string()),
+        None => Err(WorldInfoError::PluginError("Plugin Error: Missing or invalid 'items' property.".to_string())),
     }
 }
 
