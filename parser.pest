@@ -1,0 +1,54 @@
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* } // Example: Allow // comments if needed
+
+input = { SOI ~ (text | processor_tag | trigger_tag)* ~ EOI }
+text = @{ (!(processor_start | trigger_start) ~ ANY)+ }
+
+// == Processor Tag: @[name(properties)] ==
+processor_start = { "@[" }
+processor_tag = { processor_start ~ processor_name ~ "(" ~ properties? ~ ")" ~ "]" }
+processor_name = @{ (ASCII_ALPHANUMERIC | "." | "_")+ }
+
+// == Trigger Tag: <trigger id=...> ==
+trigger_start = { "<trigger" }
+trigger_tag = { trigger_start ~ trigger_attributes? ~ ">" }
+trigger_attributes = { trigger_attribute+ }
+trigger_attribute = { attribute_key ~ "=" ~ attribute_value }
+attribute_key = @{ ASCII_ALPHANUMERIC+ }
+attribute_value = @{ "\"" ~ ( !"\"" ~ ANY )* ~ "\"" | "'" ~ ( !"'" ~ ANY )* ~ "'" | (!(">" | WHITESPACE) ~ ANY)+ }
+
+// == Properties (Pseudo-JSON, used everywhere) ==
+properties = { property ~ ("," ~ property)* }
+property = { property_key ~ ":" ~ property_value }
+// Keys are unquoted identifiers
+property_key = @{ (ASCII_ALPHANUMERIC | "_")+ } // Allow underscore
+
+// Value can be various types, including nested objects/arrays using the SAME property rules
+// `property_value` itself is silent, meaning the parser yields the token matched by one of the options inside.
+property_value = _{
+    processor_tag | // Nested processor evaluation
+    string |
+    number |
+    boolean |
+    object |        // <<<< Generic object rule (uses `properties`)
+    array  |        // <<<< Generic array rule (uses `property_value`)
+    null            // <<<< Added null
+}
+
+// Generic Object (uses the main 'properties' rule with unquoted keys)
+object = { "{" ~ properties? ~ "}" } // <<<< Contains optional 'properties'
+
+// Generic Array (elements are 'property_value')
+array = { "[" ~ (property_value ~ ("," ~ property_value)*)? ~ "]" }
+null = @{ "null" }
+
+// == Basic Value Types == (shared)
+string = @{ "\"" ~ inner ~ "\"" }
+inner = { (escape | !("\"" | "\\") ~ ANY)* }
+escape = { "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t" | unicode) }
+unicode = { "u" ~ HEX_DIGIT{4} }
+number = @{ "-"? ~ int ~ ("." ~ ASCII_DIGIT+)? ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
+int = { "0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT* }
+boolean = @{ "true" | "false" }
+
+// PEST built-ins assumed: SOI, EOI, ANY, ASCII_ALPHANUMERIC, ASCII_DIGIT, ASCII_NONZERO_DIGIT, HEX_DIGIT
