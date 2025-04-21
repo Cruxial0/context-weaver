@@ -96,37 +96,35 @@ struct MyCustomPluginBridge;
 // Define your unique identifier type for plugins
 type MyPluginId = u32;
 
-impl PluginBridge for MyCustomPluginBridge {
-    type PluginId = MyPluginId; // Use your defined type
+impl PluginBridge for DummyPluginBridge {
+    type PluginId = MyPluginId;
 
-    // This function is called by ContextWeaver when a plugin processor is encountered
-    fn invoke_plugin(&self, plugin_id: Self::PluginId, properties: Value) -> ProcessorResult<String> {
-        // Match on the plugin ID to call the correct custom function
+    fn invoke_plugin(&self, plugin_id: Self::PluginId, properties: serde_json::Value) -> Result<String, WorldInfoError> {
+        // Lookup plugin by ID. Your implementation would likely be more complex
         match plugin_id {
-            0 => dummy_plugin_logic(properties),
-            // Add cases for other plugin IDs
-            _ => ProcessorResult::Err(format!("Unknown plugin ID: {}", plugin_id)),
+            0 => Ok(dummy_plugin(properties)),
+            _ => Err(crate::WorldInfoError::ProcessorError("Invalid plugin id".to_string())),
         }
     }
 }
 
 // Example custom logic for plugin ID 0
-fn dummy_plugin_logic(properties: Value) -> ProcessorResult<String> {
+fn dummy_plugin_logic(properties: Value) -> Result<String, WorldInfoError> {
     // Extract data needed from the properties passed in the entry
     // Safely handle potential errors during property access
     match properties.get("items").and_then(Value::as_array) {
         Some(items) => {
             if items.is_empty() {
-                ProcessorResult::Err("Plugin Error: 'items' array is empty.".to_string())
+                Err("Plugin Error: 'items' array is empty.".to_string())
             } else {
                 let index = rand::thread_rng().gen_range(0..items.len());
                 match items[index].as_str() {
-                    Some(item_str) => ProcessorResult::Ok(format!("The plugin's forecast is: {}", item_str)),
-                    None => ProcessorResult::Err(format!("Plugin Error: Item at index {} is not a string.", index)),
+                    Some(item_str) => Ok(format!("The plugin's forecast is: {}", item_str)),
+                    None => Err(format!("Plugin Error: Item at index {} is not a string.", index)),
                 }
             }
         },
-        None => ProcessorResult::Err("Plugin Error: Missing or invalid 'items' property.".to_string()),
+        None => Err("Plugin Error: Missing or invalid 'items' property.".to_string()),
     }
 }
 
@@ -146,11 +144,11 @@ use std::sync::Arc;
 let my_bridge = Arc::new(MyCustomPluginBridge);
 let registry = ProcessorRegistry::new(my_bridge);
 
-// 2. Register your plugin processor factory under a specific name
-//    The factory uses the bridge to call your custom logic.
-registry.register_processor("weaver.plugin.dummy.test", Box::new(PluginProcessorFactory));
+// 2. Register your plugin processor factory under a specific author and name
+registry.register_plugin_processor("dummy", "test");
 
-// 3. Define an entry using your custom processor name
+// 3. Inputs should be structured like this.
+// plugin_author, plugin_name, plugin_id are needed for identification
 let input = r#"@[weaver.plugin.dummy.test(
     plugin_author: "dummy", // Required
     plugin_name: "test",    // Required
