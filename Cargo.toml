@@ -3,6 +3,7 @@ name = "context-weaver"
 authors = ["Cruxial"]
 description = "(WIP) A procedural text evaluation engine"
 repository = "https://github.com/Cruxial0/context-weaver"
+license = "MIT"
 version = "0.1.0"
 edition = "2024"
 
