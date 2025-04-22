@@ -96,7 +96,7 @@ struct MyCustomPluginBridge;
 // Define your unique identifier type for plugins
 type MyPluginId = u32;
 
-impl PluginBridge for DummyPluginBridge {
+impl PluginBridge for MyCustomPluginBridge {
     type PluginId = MyPluginId;
 
     fn invoke_plugin(&self, plugin_id: Self::PluginId, properties: serde_json::Value) -> Result<String, WorldInfoError> {
@@ -184,23 +184,23 @@ When evaluated, `ContextWeaver` calls `invoke_plugin` on your bridge with the `p
 ---
 
 ## 🛠️ Installation
-
+### 1. Using Cargo
 ```bash
-# Example using Cargo (if applicable)
-# cargo add ContextWeaver
+# Does not actually work yet, lol
+cargo add context-weaver
 ```
+
+### 2. Cloning the repository
+1. Clone the repository using `git clone https://github.com/Cruxial0/context-weaver.git`
+2. Create a **Cargo Workspace** and link the library to your main application
 
 ---
 
 ## 🚀 Usage Examples
 
-*(Add more comprehensive usage examples here, potentially showing:*
-* *Creating and managing multiple entries.*
-* *Defining activation conditions (once implemented).*
-* *More complex processor interactions.*
-* *Integration with an LLM pipeline.)*
-
-The examples under "How Processors Work" and "Plugin Support" demonstrate basic evaluation and extension.
+* LLM context manipulation
+* Text-based games (Can be used to generate random characters and scenarios)
+* Applications that benefit from dynamic prompts (ComfyUI, A1111, etc.)
 
 ---
 
