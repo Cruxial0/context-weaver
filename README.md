@@ -96,7 +96,7 @@ struct MyCustomPluginBridge;
 // Define your unique identifier type for plugins
 type MyPluginId = u32;
 
-impl PluginBridge for DummyPluginBridge {
+impl PluginBridge for MyCustomPluginBridge {
     type PluginId = MyPluginId;
 
     fn invoke_plugin(&self, plugin_id: Self::PluginId, properties: serde_json::Value) -> Result<String, WorldInfoError> {
