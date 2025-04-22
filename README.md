@@ -1,5 +1,7 @@
 # ContextWeaver
 
+### Please note that this project is in a very early stage of development - Breaking changes will occur often.
+
 **`ContextWeaver`** is a *(WIP)* powerful system based on WorldInfo/Lorebooks. It's designed to dynamically manage and inject information into language model (LLM) contexts, and potentially other applications requiring dynamic text generation. It achieves this through **entries** with **activation conditions** and inline **processors**.
 
 ---
@@ -244,10 +246,4 @@ Here's a look at planned features and current progress:
 
 Contributions are welcome! Please feel free to open an issue or submit a pull request.
 
-*(Add contribution guidelines if you have specific requirements)*
-
 ---
-
-## 📜 License
-
-*(Specify your project's license here, e.g., MIT, Apache 2.0)*
