@@ -79,13 +79,13 @@ pub enum AstNode {
 
 // --- Derive the Pest Parser ---
 #[derive(Parser)]
-#[grammar = "parser.pest"] // Use the grammar from pest_grammar_if
+#[grammar = "parser.pest"]
 struct WorldInfoParser;
 
 // --- Pratt Parser Definition ---
 lazy_static! {
     static ref PRATT_PARSER: PrattParser<Rule> = {
-        use pest::pratt_parser::Assoc::*; // Import Assoc directly
+        use pest::pratt_parser::Assoc::*;
         use Rule::*;
 
         PrattParser::new()
@@ -111,32 +111,32 @@ fn parse_expression_pratt(pairs: Pairs<Rule>) -> Result<Expression, ParserError>
             }
             // --- Actual Primary Terms ---
             Rule::literal => {
-                 match parse_literal(primary.clone())? {
-                     AstNode::NestedValue(v) => Ok(Expression::Literal(v)),
-                     _ => Err(ParserError::Processing(format!("Expected literal value from literal rule, got {:?}", primary.as_str())))
-                 }
+                match parse_literal(primary.clone())? {
+                    AstNode::NestedValue(v) => Ok(Expression::Literal(v)),
+                    _ => Err(ParserError::Processing(format!("Expected literal value from literal rule, got {:?}", primary.as_str())))
+                }
             }
             Rule::variable => {
-                 match parse_atomic_variable(primary.clone())? {
-                      AstNode::Variable { scope, name, raw_tag } => Ok(Expression::Variable { scope, name, raw_tag }),
-                      _ => Err(ParserError::Processing(format!("Expected variable node, got {:?}", primary.as_str())))
-                 }
+                match parse_atomic_variable(primary.clone())? {
+                    AstNode::Variable { scope, name, raw_tag } => Ok(Expression::Variable { scope, name, raw_tag }),
+                    _ => Err(ParserError::Processing(format!("Expected variable node, got {:?}", primary.as_str())))
+                }
             }
             Rule::number | Rule::boolean | Rule::null | Rule::quoted_string => {
-                 match parse_literal(primary.clone())? {
-                     AstNode::NestedValue(v) => Ok(Expression::Literal(v)),
-                     _ => Err(ParserError::Processing(format!("Expected literal value from specific literal rule, got {:?}", primary.as_str())))
-                 }
+                match parse_literal(primary.clone())? {
+                    AstNode::NestedValue(v) => Ok(Expression::Literal(v)),
+                    _ => Err(ParserError::Processing(format!("Expected literal value from specific literal rule, got {:?}", primary.as_str())))
+                }
             }
             Rule::string => {
-                 let inner = primary.clone().into_inner().next().ok_or_else(|| ParserError::Processing("Empty string rule".to_string()))?;
-                 match parse_literal(inner)? {
-                     AstNode::NestedValue(v) => Ok(Expression::Literal(v)),
-                     _ => Err(ParserError::Processing(format!("Expected literal value from string rule, got {:?}", primary.as_str())))
-                 }
+                let inner = primary.clone().into_inner().next().ok_or_else(|| ParserError::Processing("Empty string rule".to_string()))?;
+                match parse_literal(inner)? {
+                    AstNode::NestedValue(v) => Ok(Expression::Literal(v)),
+                    _ => Err(ParserError::Processing(format!("Expected literal value from string rule, got {:?}", primary.as_str())))
+                }
             }
             Rule::negation => {
-                 Err(ParserError::Internal(format!("Unexpected primary rule 'negation', should be handled by prefix operator logic: {:?}", primary.as_str())))
+                Err(ParserError::Internal(format!("Unexpected primary rule 'negation', should be handled by prefix operator logic: {:?}", primary.as_str())))
             }
             rule => Err(ParserError::Processing(format!("Unexpected primary rule: {:?} ({})", rule, primary.as_str()))),
         })
@@ -202,7 +202,7 @@ pub fn parse_entry_content<P: PluginBridge + Debug>(
 
     let input_pair = pairs.peek().ok_or_else(|| ParserError::Processing("Empty parse result".to_string()))?;
     if input_pair.as_rule() != Rule::input {
-         return Err(ParserError::Processing(format!("Expected Rule::input, found {:?}", input_pair.as_rule())));
+        return Err(ParserError::Processing(format!("Expected Rule::input, found {:?}", input_pair.as_rule())));
     }
 
     // Build AST from the children of the 'input' rule
@@ -245,7 +245,7 @@ fn build_ast_from_pairs<'i, P: PluginBridge + Debug>(
                 let content_pair = pairs.next().unwrap(); // Consume the pair
                 nodes.push(parse_trigger_content::<P>(content_pair)?);
             }
-             Rule::variable_tag_content => {
+            Rule::variable_tag_content => {
                 let content_pair = pairs.next().unwrap(); // Consume the pair
                 nodes.push(parse_variable_content::<P>(content_pair)?);
             }
@@ -255,7 +255,7 @@ fn build_ast_from_pairs<'i, P: PluginBridge + Debug>(
                 let macro_container_pair = pairs.next().unwrap(); // Consume the 'macro_tag' pair
                 // Get the specific macro type (if or foreach) from the inner rule
                 let macro_pair = macro_container_pair.clone().into_inner().next()
-                     .ok_or_else(|| ParserError::Processing(format!("Empty 'macro_tag' pair: {:?}", macro_container_pair.as_str())))?;
+                    .ok_or_else(|| ParserError::Processing(format!("Empty 'macro_tag' pair: {:?}", macro_container_pair.as_str())))?;
                 match macro_pair.as_rule() {
                     Rule::macro_if => nodes.push(parse_macro_if::<P>(macro_pair)?),
                     Rule::macro_foreach => nodes.push(parse_macro_foreach::<P>(macro_pair)?),
@@ -269,22 +269,22 @@ fn build_ast_from_pairs<'i, P: PluginBridge + Debug>(
                 break; // Stop parsing
             }
 
-            // --- Ignore Whitespace (Should be handled by `_` in grammar, but belt-and-suspenders) ---
+            // --- Ignore Whitespace ---
             Rule::WHITESPACE => {
                 pairs.next(); // Consume whitespace
             }
 
             // --- Unexpected Rule ---
             r => {
-                 // Consume the unexpected pair to avoid infinite loop
-                 let unexpected_pair = pairs.next().unwrap();
-                 eprintln!("Unexpected rule during AST building: {:?} ({:?})", r, unexpected_pair.as_str());
-                 // Return specific error for unexpected content rules if they appear here
-                 // (This indicates a logic error elsewhere, as they should be handled above)
-                 if matches!(r, Rule::processor_tag_content | Rule::trigger_tag_content | Rule::variable_tag_content) {
+                // Consume the unexpected pair to avoid infinite loop
+                let unexpected_pair = pairs.next().unwrap();
+                eprintln!("Unexpected rule during AST building: {:?} ({:?})", r, unexpected_pair.as_str());
+                // Return specific error for unexpected content rules if they appear here
+                // (This indicates a logic error elsewhere, as they should be handled above)
+                if matches!(r, Rule::processor_tag_content | Rule::trigger_tag_content | Rule::variable_tag_content) {
                     eprintln!("Error: Content rule {:?} encountered unexpectedly in main loop.", r);
-                 }
-                 return Err(ParserError::InvalidRule(r));
+                }
+                return Err(ParserError::InvalidRule(r));
             }
         }
     }
@@ -346,25 +346,26 @@ fn parse_trigger_content<'i, P: PluginBridge + Debug>(
         if attrs_pair.as_rule() == Rule::trigger_attributes {
             let consumed_attrs = inner.next().unwrap(); // Consume attributes
             for attr_pair in consumed_attrs.clone().into_inner() {
-                 if attr_pair.as_rule() == Rule::trigger_attribute {
-                     let mut attr_inner = attr_pair.clone().into_inner(); // trigger_key, trigger_value
-                     let key_pair = attr_inner.next().ok_or_else(|| ParserError::Processing("Trigger attribute missing key".to_string()))?;
-                     let value_pair = attr_inner.next().ok_or_else(|| ParserError::Processing("Trigger attribute missing value".to_string()))?;
+                if attr_pair.as_rule() == Rule::trigger_attribute {
+                    let mut attr_inner = attr_pair.clone().into_inner(); // trigger_key, trigger_value
+                    let key_pair = attr_inner.next().ok_or_else(|| ParserError::Processing("Trigger attribute missing key".to_string()))?;
+                    let value_pair = attr_inner.next().ok_or_else(|| ParserError::Processing("Trigger attribute missing value".to_string()))?;
 
-                     if key_pair.as_str() == "id" {
+                    if key_pair.as_str() == "id" {
                         // trigger_value is silent `_`, so we get the inner quoted_string
                         let quoted_string_pair = value_pair.into_inner().next()
                             .ok_or_else(|| ParserError::Processing("Trigger id value missing quoted_string".to_string()))?;
-                         if quoted_string_pair.as_rule() == Rule::quoted_string {
+                        if quoted_string_pair.as_rule() == Rule::quoted_string {
                             let content = quoted_string_pair.clone().into_inner()
                                 .find(|p| p.as_rule() == Rule::string_content)
                                 .map(|p| p.as_str()).unwrap_or("");
                             trigger_id = Some(unescape_string(content)?);
-                         } else {
-                             return Err(ParserError::Processing(format!("Invalid trigger id value type: expected quoted_string, got {:?}", quoted_string_pair.as_rule())));
-                         }
-                     }
-                 }
+                        } 
+                        else {
+                            return Err(ParserError::Processing(format!("Invalid trigger id value type: expected quoted_string, got {:?}", quoted_string_pair.as_rule())));
+                        }
+                    }
+                }
             }
         }
     }
@@ -443,7 +444,7 @@ fn parse_macro_if<P: PluginBridge + Debug>(pair: Pair<Rule>) -> Result<AstNode, 
     if then_nodes_pair.as_rule() != Rule::inner_nodes { return Err(ParserError::Processing(format!("Expected inner_nodes for 'then' branch, found {:?} in {}", then_nodes_pair.as_rule(), full_raw_start_tag))); }
     let mut then_inner_pairs = then_nodes_pair.clone().into_inner().peekable();
     let mut then_branch = build_ast_from_pairs::<P>(&mut then_inner_pairs)?;
-    // *** Trim whitespace around the branch content ***
+    // Trim whitespace around the branch content
     trim_outer_text_nodes(&mut then_branch);
 
 
@@ -455,12 +456,12 @@ fn parse_macro_if<P: PluginBridge + Debug>(pair: Pair<Rule>) -> Result<AstNode, 
             let mut else_inner = else_pair.clone().into_inner(); // macro_else_tag, inner_nodes (else)
             let _else_tag = else_inner.next().ok_or_else(|| ParserError::Processing("Else macro missing tag".to_string()))?;
             let else_nodes_pair = else_inner.next().ok_or_else(|| ParserError::Processing("Else macro missing content".to_string()))?;
-             if else_nodes_pair.as_rule() != Rule::inner_nodes { return Err(ParserError::Processing(format!("Expected inner_nodes for 'else' branch, found {:?} in {}", else_nodes_pair.as_rule(), full_raw_start_tag))); }
-             let mut else_inner_pairs = else_nodes_pair.clone().into_inner().peekable();
-             let mut parsed_else_branch = build_ast_from_pairs::<P>(&mut else_inner_pairs)?;
-             // *** Trim whitespace around the branch content ***
-             trim_outer_text_nodes(&mut parsed_else_branch);
-             else_branch = Some(parsed_else_branch);
+            if else_nodes_pair.as_rule() != Rule::inner_nodes { return Err(ParserError::Processing(format!("Expected inner_nodes for 'else' branch, found {:?} in {}", else_nodes_pair.as_rule(), full_raw_start_tag))); }
+            let mut else_inner_pairs = else_nodes_pair.clone().into_inner().peekable();
+            let mut parsed_else_branch = build_ast_from_pairs::<P>(&mut else_inner_pairs)?;
+            // Trim whitespace around the branch content
+            trim_outer_text_nodes(&mut parsed_else_branch);
+            else_branch = Some(parsed_else_branch);
         }
     }
 
@@ -478,7 +479,7 @@ fn parse_macro_if<P: PluginBridge + Debug>(pair: Pair<Rule>) -> Result<AstNode, 
 
 /// Parses a pest pair representing a macro foreach tag into an AstNode::MacroForeach.
 fn parse_macro_foreach<P: PluginBridge + Debug>(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
-     if pair.as_rule() != Rule::macro_foreach {
+    if pair.as_rule() != Rule::macro_foreach {
         return Err(ParserError::Processing(format!("Expected macro_foreach rule, got {:?}", pair.as_rule())));
     }
     let mut inner = pair.clone().into_inner(); // macro_foreach_start, identifier (item_var), expression (collection), macro_tag_end, inner_nodes, macro_endforeach
@@ -487,8 +488,8 @@ fn parse_macro_foreach<P: PluginBridge + Debug>(pair: Pair<Rule>) -> Result<AstN
     let start_tag_str = start_tag_pair.as_str();
 
     let item_var_pair = inner.next().ok_or_else(|| ParserError::Processing(format!("Foreach macro missing item variable: {}", start_tag_str)))?;
-     if item_var_pair.as_rule() != Rule::identifier {
-        return Err(ParserError::Processing(format!("Expected identifier for item variable in foreach, found {:?}: {}", item_var_pair.as_rule(), start_tag_str)));
+        if item_var_pair.as_rule() != Rule::identifier {
+            return Err(ParserError::Processing(format!("Expected identifier for item variable in foreach, found {:?}: {}", item_var_pair.as_rule(), start_tag_str)));
     }
     let item_variable = item_var_pair.as_str().trim().to_string();
     let item_var_str_full = item_var_pair.as_str();
@@ -505,7 +506,7 @@ fn parse_macro_foreach<P: PluginBridge + Debug>(pair: Pair<Rule>) -> Result<AstN
     if body_nodes_pair.as_rule() != Rule::inner_nodes { return Err(ParserError::Processing(format!("Expected inner_nodes for 'foreach' body, found {:?} in {}", body_nodes_pair.as_rule(), full_raw_start_tag))); }
     let mut body_inner_pairs = body_nodes_pair.clone().into_inner().peekable();
     let mut body = build_ast_from_pairs::<P>(&mut body_inner_pairs)?;
-    // *** Trim whitespace around the body content ***
+    // Trim whitespace around the body content
     trim_outer_text_nodes(&mut body);
 
     let endforeach_pair = inner.next().ok_or_else(|| ParserError::Processing(format!("Foreach macro missing endforeach tag: {}", full_raw_start_tag)))?;
@@ -534,9 +535,9 @@ fn parse_atomic_variable(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
         let name = parts[1].trim().to_string();
         // Basic validation (ensure not empty)
         if scope.is_empty() || name.is_empty() {
-             Err(ParserError::Processing(format!("Invalid atomic variable format (empty scope/name): {}", raw_tag)))
+            Err(ParserError::Processing(format!("Invalid atomic variable format (empty scope/name): {}", raw_tag)))
         } else {
-             Ok(AstNode::Variable { scope, name, raw_tag })
+            Ok(AstNode::Variable { scope, name, raw_tag })
         }
     } else {
         Err(ParserError::Processing(format!("Invalid atomic variable format (missing ':'): {}", raw_tag)))
@@ -545,13 +546,13 @@ fn parse_atomic_variable(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
 
 /// Parses an *atomic* processor tag pair (e.g., from within a property value).
 fn parse_atomic_processor(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
-     if pair.as_rule() != Rule::processor_tag {
+    if pair.as_rule() != Rule::processor_tag {
         return Err(ParserError::Processing(format!("Expected atomic processor_tag rule, got {:?}", pair.as_rule())));
     }
     let raw_tag = pair.as_str().to_string();
     // Similar to atomic variable, parse based on expected string structure: @[name(...)] or @[name]
     let content = raw_tag.trim_start_matches("@[")
-                         .trim_end_matches(']');
+                            .trim_end_matches(']');
 
     let (name_str, props_str_opt) = match content.find('(') {
         Some(paren_idx) => {
@@ -567,29 +568,29 @@ fn parse_atomic_processor(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
 
     let name = name_str.trim().to_string();
     if name.is_empty() {
-         return Err(ParserError::Processing(format!("Malformed atomic processor tag (empty name): {}", raw_tag)));
+        return Err(ParserError::Processing(format!("Malformed atomic processor tag (empty name): {}", raw_tag)));
     }
 
     let properties = match props_str_opt {
-         Some(props_str) if !props_str.trim().is_empty() => {
-             // Re-parse the properties string using the properties rule
-             let prop_pairs = WorldInfoParser::parse(Rule::properties, props_str)
-                 .map_err(|e| ParserError::PestParse(e.with_path(&format!("atomic processor properties: {}", props_str))))?;
-             // parse yields an iterator, get the first (and likely only) pair
-             if let Some(props_pair) = prop_pairs.peek() {
-                 // Ensure the parsed rule is actually 'properties'
-                 if props_pair.as_rule() == Rule::properties {
-                    parse_properties(props_pair)?
-                 } else {
-                     // This indicates an internal error or grammar issue if parse succeeded but didn't yield 'properties'
-                     return Err(ParserError::Internal(format!("Expected properties rule from inner parse, got {:?}", props_pair.as_rule())));
-                 }
-             } else {
-                 // If parsing props_str yielded no pairs, treat as empty
-                 Vec::new()
-             }
-         }
-         _ => Vec::new(), // No properties string or empty properties string
+        Some(props_str) if !props_str.trim().is_empty() => {
+            // Re-parse the properties string using the properties rule
+            let prop_pairs = WorldInfoParser::parse(Rule::properties, props_str)
+                .map_err(|e| ParserError::PestParse(e.with_path(&format!("atomic processor properties: {}", props_str))))?;
+            // parse yields an iterator, get the first (and likely only) pair
+            if let Some(props_pair) = prop_pairs.peek() {
+                // Ensure the parsed rule is actually 'properties'
+                if props_pair.as_rule() == Rule::properties {
+                parse_properties(props_pair)?
+                } else {
+                    // This indicates an internal error or grammar issue if parse succeeded but didn't yield 'properties'
+                    return Err(ParserError::Internal(format!("Expected properties rule from inner parse, got {:?}", props_pair.as_rule())));
+                }
+            } else {
+                // If parsing props_str yielded no pairs, treat as empty
+                Vec::new()
+            }
+        }
+        _ => Vec::new(), // No properties string or empty properties string
     };
 
 
@@ -626,11 +627,11 @@ fn parse_literal(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
         }
         Rule::boolean => Ok(AstNode::NestedValue(json!(pair.as_str() == "true"))),
         Rule::null => Ok(AstNode::NestedValue(Value::Null)),
-         // Handle the wrapping literal rule if needed
-         Rule::literal => {
-             let inner_pair = pair.into_inner().next().ok_or_else(|| ParserError::Processing("Empty literal rule".to_string()))?;
-             parse_literal(inner_pair)
-         }
+        // Handle the wrapping literal rule if needed
+        Rule::literal => {
+            let inner_pair = pair.into_inner().next().ok_or_else(|| ParserError::Processing("Empty literal rule".to_string()))?;
+            parse_literal(inner_pair)
+        }
         r => Err(ParserError::Processing(format!("Unexpected rule type for literal: {:?} ({:?})", r, pair.as_str()))),
     }
 }
@@ -678,7 +679,7 @@ fn unescape_string(s: &str) -> Result<String, ParserError> {
 /// Expects a `properties` rule pair.
 fn parse_properties(pair: Pair<Rule>) -> Result<Vec<(String, AstNode)>, ParserError> {
     if pair.as_rule() != Rule::properties {
-         return Err(ParserError::Processing(format!("Expected properties rule, got {:?}", pair.as_rule())));
+        return Err(ParserError::Processing(format!("Expected properties rule, got {:?}", pair.as_rule())));
     }
     let mut props = Vec::new();
     // `properties` contains a sequence of `property` pairs
@@ -692,7 +693,7 @@ fn parse_properties(pair: Pair<Rule>) -> Result<Vec<(String, AstNode)>, ParserEr
 
             // Check the rule is indeed property_key
             if key_pair_outer.as_rule() != Rule::property_key {
-                 return Err(ParserError::Processing(format!("Expected property_key rule, got {:?} in {}", key_pair_outer.as_rule(), prop_pair.as_str())));
+                return Err(ParserError::Processing(format!("Expected property_key rule, got {:?} in {}", key_pair_outer.as_rule(), prop_pair.as_str())));
             }
 
             // Handle atomic property_key
@@ -737,9 +738,9 @@ fn parse_property_value(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
         }
         Rule::array => { // array is non-atomic [ ]
             let items = pair.clone().into_inner()
-                 .filter(|p| !matches!(p.as_rule(), Rule::WHITESPACE)) // Filter only actual value rules
-                 .map(parse_property_value) // Recursively parse each item
-                 .collect::<Result<Vec<_>, _>>()?;
+                .filter(|p| !matches!(p.as_rule(), Rule::WHITESPACE)) // Filter only actual value rules
+                .map(parse_property_value) // Recursively parse each item
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(AstNode::NestedArray(items))
         }
 
@@ -751,7 +752,7 @@ fn parse_property_value(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
         // Handle string_content directly if it appears (e.g., inside an array parse tree)
         Rule::string_content => {
             // Treat string_content directly as an unescaped string value
-             Ok(AstNode::NestedValue(Value::String(pair.as_str().to_string())))
+            Ok(AstNode::NestedValue(Value::String(pair.as_str().to_string())))
         }
 
         // Keep the literal rule as a fallback
@@ -777,17 +778,16 @@ fn parse_property_value(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
 fn resolve_ast_nodes<P: PluginBridge + Debug>(
     nodes: &[AstNode],
     registry: &WorldInfoRegistry<P>,
-    // TODO: Add context here: e.g., variable_scopes: &VariableScopes
 ) -> Result<Vec<Box<dyn WorldInfoNode>>, ParserError> {
     let mut resolved_nodes = Vec::new();
     for node in nodes {
         println!("Resolving node: {:?}", node);
         // Pass context down if needed
-        match resolve_single_node(node, registry /*, variable_scopes */) {
+        match resolve_single_node(node, registry) {
             Ok(resolved_node_list) => resolved_nodes.extend(resolved_node_list),
             Err(e) => {
-                 eprintln!("Resolution failed for node {:?}: {}", node, e);
-                 return Err(e); // Stop resolution on first error
+                eprintln!("Resolution failed for node {:?}: {}", node, e);
+                return Err(e); // Stop resolution on first error
             }
         }
     }
@@ -799,7 +799,6 @@ fn resolve_ast_nodes<P: PluginBridge + Debug>(
 fn resolve_single_node<P: PluginBridge + Debug>(
     node: &AstNode,
     registry: &WorldInfoRegistry<P>,
-     // TODO: Add context here: e.g., variable_scopes: &VariableScopes
 ) -> Result<Vec<Box<dyn WorldInfoNode>>, ParserError> {
     match node {
         AstNode::Text(content) => {
@@ -812,7 +811,7 @@ fn resolve_single_node<P: PluginBridge + Debug>(
         }
         AstNode::Processor { name, properties, .. } => {
             println!("Resolving Processor: {} with properties AST: {:?}", name, properties);
-            let resolved_props = resolve_properties_to_json(properties, registry /*, variable_scopes */)?;
+            let resolved_props = resolve_properties_to_json(properties, registry)?;
             println!("Resolved properties for {}: {:?}", name, resolved_props);
             match registry.instantiate_processor(name, &resolved_props) {
                 Some(processor) => {
@@ -839,22 +838,21 @@ fn resolve_single_node<P: PluginBridge + Debug>(
                 Err(ParserError::UndefinedVariable(format!("Variable not found: {}", raw_tag)))
             }
         }
-        // --- *** IMPLEMENT IF MACRO EVALUATION *** ---
         AstNode::MacroIf { raw_tag, condition, then_branch, else_branch } => {
             println!("Evaluating MacroIf condition: {}", raw_tag);
             // Evaluate the condition expression using the registry (context)
-            match evaluate_expression(condition, registry /*, context */) {
+            match evaluate_expression(condition, registry) {
                 Ok(condition_result) => {
                     println!("Condition evaluated to: {:?}", condition_result);
                     // Check the truthiness of the result
                     if is_truthy(&condition_result) {
                         println!("Executing then branch for: {}", raw_tag);
                         // Recursively resolve the nodes in the 'then' branch
-                        resolve_ast_nodes(then_branch, registry /*, context */)
+                        resolve_ast_nodes(then_branch, registry)
                     } else if let Some(else_nodes) = else_branch {
                         println!("Executing else branch for: {}", raw_tag);
-                         // Recursively resolve the nodes in the 'else' branch
-                        resolve_ast_nodes(else_nodes, registry /*, context */)
+                        // Recursively resolve the nodes in the 'else' branch
+                        resolve_ast_nodes(else_nodes, registry)
                     } else {
                         println!("Condition false, no else branch for: {}", raw_tag);
                         Ok(Vec::new()) // No branch executed, return empty list of nodes
@@ -867,7 +865,6 @@ fn resolve_single_node<P: PluginBridge + Debug>(
                 }
             }
         }
-        // --- *** END IF MACRO EVALUATION *** ---
         AstNode::MacroForeach { raw_tag, .. } => {
             println!("Resolving MacroForeach: {}", raw_tag);
             // Placeholder: Macro evaluation requires evaluating the collection and iterating.
@@ -884,7 +881,6 @@ fn resolve_single_node<P: PluginBridge + Debug>(
 fn resolve_properties_to_json<P: PluginBridge + Debug>(
     properties: &[(String, AstNode)], // Input is Vec<(Key, ValueAstNode)>
     registry: &WorldInfoRegistry<P>,
-    // TODO: Add context here: e.g., variable_scopes: &VariableScopes
 ) -> Result<Value, ParserError> {
     let mut map = Map::new();
     for (key, value_node) in properties {
@@ -901,7 +897,6 @@ fn resolve_properties_to_json<P: PluginBridge + Debug>(
 fn resolve_property_value_to_json<P: PluginBridge + Debug>(
     node: &AstNode, // Input is a single AST node representing the value
     registry: &WorldInfoRegistry<P>,
-    // TODO: Add context here: e.g., variable_scopes: &VariableScopes
 ) -> Result<Value, ParserError> {
     match node {
         // If a property value is another processor, variable, macro etc.,
@@ -914,8 +909,8 @@ fn resolve_property_value_to_json<P: PluginBridge + Debug>(
             for res_node in resolved_nodes {
                 // Assume WorldInfoNode has a method like `content()` or `evaluate_to_string()`
                 match res_node.content() { // Replace `.content()` with the actual method if different
-                     Ok(content) => combined_content.push_str(&content),
-                     Err(e) => return Err(ParserError::ProcessorExecution(format!("Failed to get content from resolved node within property: {}", e))),
+                    Ok(content) => combined_content.push_str(&content),
+                    Err(e) => return Err(ParserError::ProcessorExecution(format!("Failed to get content from resolved node within property: {}", e))),
                 }
             }
             println!("Resolved nested node to string: {:?}", combined_content);
@@ -1030,7 +1025,7 @@ fn evaluate_expression<P: PluginBridge + Debug>(
                         return Ok(Value::Bool(false)); // Short-circuit
                     }
                     // Only evaluate right if left is truthy
-                     let right_value = evaluate_expression(right, registry)?;
+                    let right_value = evaluate_expression(right, registry)?;
                     return Ok(Value::Bool(is_truthy(&right_value))); // Result is truthiness of right
                 }
                 _ => {} // Continue for comparison operators
@@ -1086,13 +1081,13 @@ fn evaluate_binary_comparison(left: &Value, op: BinaryOperator, right: &Value) -
         }
         // String comparison (lexicographical)
         (Value::String(l_str), Value::String(r_str)) => {
-             Ok(Value::Bool(match op {
-                 BinaryOperator::Lt => l_str < r_str,
-                 BinaryOperator::Gt => l_str > r_str,
-                 BinaryOperator::Lte => l_str <= r_str,
-                 BinaryOperator::Gte => l_str >= r_str,
-                 _ => unreachable!(),
-             }))
+            Ok(Value::Bool(match op {
+                BinaryOperator::Lt => l_str < r_str,
+                BinaryOperator::Gt => l_str > r_str,
+                BinaryOperator::Lte => l_str <= r_str,
+                BinaryOperator::Gte => l_str >= r_str,
+                _ => unreachable!(),
+            }))
         }
         // Add other comparison logic if needed (e.g., bool vs bool? null comparisons?)
 
