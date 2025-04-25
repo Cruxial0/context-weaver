@@ -6,6 +6,7 @@ use std::fmt::Debug;
 pub struct WorldInfoRegistry<P: PluginBridge + 'static> {
     processor_factories: RwLock<HashMap<String, Box<dyn WorldInfoProcessorFactory<P>>>>,
     plugin_bridge: Arc<P>,
+    variables: HashMap<String, serde_json::Value>
 }
 
 impl<P: PluginBridge + 'static> WorldInfoRegistry<P> {
@@ -13,6 +14,7 @@ impl<P: PluginBridge + 'static> WorldInfoRegistry<P> {
         Self {
             processor_factories: RwLock::new(HashMap::new()),
             plugin_bridge,
+            variables: HashMap::new()
         }
     }
 
@@ -32,6 +34,21 @@ impl<P: PluginBridge + 'static> WorldInfoRegistry<P> {
     pub fn plugin_bridge(&self) -> &P {
         &self.plugin_bridge
     }
+
+    pub fn register_variable(&mut self, var: String, value: serde_json::Value) {
+        self.variables.insert(var, value);
+    }
+
+    pub fn update_variable(&mut self, name: &str, value: serde_json::Value) {
+        if let Some(var) = self.variables.get_mut(name) {
+            *var = value;
+        }
+    }
+
+    pub fn get_variable(&self, name: &str) -> Option<serde_json::Value> {
+        self.variables.get(name).cloned()
+    }
+    
 }
 
 // Define the factory trait

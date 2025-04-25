@@ -1,7 +1,8 @@
+use crate::core::nodes::{TextNode, VariableNode};
 // src/parser.rs
 use crate::core::processors::{PluginBridge, WorldInfoRegistry};
 use crate::errors::ParserError;
-use crate::{TextNode, WorldInfoNode}; // Placeholder imports
+use crate::WorldInfoNode; // Placeholder imports
 use pest::iterators::{Pair, Pairs};
 use pest::Parser;
 use pest_derive::Parser;
@@ -697,7 +698,7 @@ fn resolve_single_node<P: PluginBridge + Debug>(
             Ok(vec![ Box::new(TextNode { content: content.clone() }) as Box<dyn WorldInfoNode> ])
         },
         AstNode::Trigger { id, raw_tag } => {
-             println!("Resolving Trigger: {}", raw_tag);
+            println!("Resolving Trigger: {}", raw_tag);
             // Represent as text for now. Needs proper handling in evaluation.
             Ok(vec![ Box::new(TextNode { content: format!("<trigger id=\"{}\">", id) }) as Box<dyn WorldInfoNode> ])
         }
@@ -705,7 +706,7 @@ fn resolve_single_node<P: PluginBridge + Debug>(
             println!("Resolving Processor: {} with properties AST: {:?}", name, properties);
             // Resolve nested AST property values into a single JSON value for the processor
             let resolved_props = resolve_properties_to_json(properties, registry /*, variable_scopes */)?;
-             println!("Resolved properties for {}: {:?}", name, resolved_props);
+            println!("Resolved properties for {}: {:?}", name, resolved_props);
             // Instantiate the processor using the resolved JSON properties
             match registry.instantiate_processor(name, &resolved_props) {
                 Some(processor) => {
@@ -720,24 +721,30 @@ fn resolve_single_node<P: PluginBridge + Debug>(
                 },
             }
         }
-        AstNode::Variable { raw_tag, .. } => {
-             println!("Resolving Variable: {}", raw_tag);
-             // Placeholder: Variable resolution needs access to the current variable scopes/context
-             Err(ParserError::Evaluation(format!("Variable evaluation not implemented: {}", raw_tag)))
+        AstNode::Variable { raw_tag, scope, name } => {
+            println!("Resolving Variable: {}", raw_tag);
+            let full_name = format!("{}:{}", scope, name);
+            if let Some(var) = registry.get_variable(&full_name) {
+                println!("Successfully resolved variable: {}", raw_tag);
+                let node = VariableNode::new(var);
+                Ok(vec![Box::new(node) as Box<dyn WorldInfoNode>])
+            } else {
+                Err(ParserError::UndefinedVariable(format!("Variable not found: {}", raw_tag)))
+            }
         }
         AstNode::MacroIf { raw_tag, .. } => {
-             println!("Resolving MacroIf: {}", raw_tag);
-             // Placeholder: Macro evaluation requires evaluating the condition and resolving branches.
-             Err(ParserError::Evaluation(format!("If macro evaluation not implemented: {}", raw_tag)))
+            println!("Resolving MacroIf: {}", raw_tag);
+            // Placeholder: Macro evaluation requires evaluating the condition and resolving branches.
+            Err(ParserError::Evaluation(format!("If macro evaluation not implemented: {}", raw_tag)))
         }
         AstNode::MacroForeach { raw_tag, .. } => {
-             println!("Resolving MacroForeach: {}", raw_tag);
-             // Placeholder: Macro evaluation requires evaluating the collection and iterating.
-             Err(ParserError::Evaluation(format!("Foreach macro evaluation not implemented: {}", raw_tag)))
+            println!("Resolving MacroForeach: {}", raw_tag);
+            // Placeholder: Macro evaluation requires evaluating the collection and iterating.
+            Err(ParserError::Evaluation(format!("Foreach macro evaluation not implemented: {}", raw_tag)))
         }
         // These should only exist *within* properties during AST building, not as top-level nodes for resolution.
         AstNode::NestedValue(_) | AstNode::NestedArray(_) | AstNode::NestedObject(_) => {
-             Err(ParserError::Processing(format!("Unexpected nested AST node type during final resolution: {:?}", node)))
+            Err(ParserError::Processing(format!("Unexpected nested AST node type during final resolution: {:?}", node)))   
         }
     }
 }
@@ -750,10 +757,10 @@ fn resolve_properties_to_json<P: PluginBridge + Debug>(
 ) -> Result<Value, ParserError> {
     let mut map = Map::new();
     for (key, value_node) in properties {
-         println!("Resolving property key: {}, value AST: {:?}", key, value_node);
-         // Resolve the AST node for the value into a JSON value
+        println!("Resolving property key: {}, value AST: {:?}", key, value_node);
+        // Resolve the AST node for the value into a JSON value
         let resolved_value = resolve_property_value_to_json(value_node, registry /*, variable_scopes */)?;
-         println!("Resolved property key: {}, resolved value: {:?}", key, resolved_value);
+        println!("Resolved property key: {}, resolved value: {:?}", key, resolved_value);
         map.insert(key.clone(), resolved_value);
     }
     Ok(Value::Object(map)) // Return a JSON object
@@ -763,14 +770,14 @@ fn resolve_properties_to_json<P: PluginBridge + Debug>(
 fn resolve_property_value_to_json<P: PluginBridge + Debug>(
     node: &AstNode, // Input is a single AST node representing the value
     registry: &WorldInfoRegistry<P>,
-     // TODO: Add context here: e.g., variable_scopes: &VariableScopes
+    // TODO: Add context here: e.g., variable_scopes: &VariableScopes
 ) -> Result<Value, ParserError> {
     match node {
         // If a property value is another processor, variable, macro etc.,
         // resolve it first, then get its content (likely as a string).
         // This assumes nested tags evaluate to strings when used as property values.
         AstNode::Processor { .. } | AstNode::MacroIf { .. } | AstNode::MacroForeach { .. } | AstNode::Text { .. } | AstNode::Trigger { .. } => {
-             println!("Resolving complex node within property: {:?}", node);
+            println!("Resolving complex node within property: {:?}", node);
             let resolved_nodes = resolve_single_node(node, registry /*, variable_scopes */)?;
             let mut combined_content = String::new();
             for res_node in resolved_nodes {
@@ -780,20 +787,20 @@ fn resolve_property_value_to_json<P: PluginBridge + Debug>(
                      Err(e) => return Err(ParserError::ProcessorExecution(format!("Failed to get content from resolved node within property: {}", e))),
                 }
             }
-             println!("Resolved nested node to string: {:?}", combined_content);
+            println!("Resolved nested node to string: {:?}", combined_content);
             Ok(Value::String(combined_content))
         }
         AstNode::Variable { raw_tag, .. } => {
-             println!("Resolving Variable within property: {}", raw_tag);
-             // Placeholder: Evaluate the variable based on scope/context
-             Err(ParserError::Evaluation(format!("Variable evaluation not implemented for property value: {}", raw_tag)))
+            println!("Resolving Variable within property: {}", raw_tag);
+            // Placeholder: Evaluate the variable based on scope/context
+            Err(ParserError::Evaluation(format!("Variable evaluation not implemented for property value: {}", raw_tag)))
         }
         // Handle literal values directly - AstNode::NestedValue wraps the serde_json::Value
         AstNode::NestedValue(v) => {
             println!("Resolving literal property value: {:?}", v);
             // Check if a string literal itself contains tags that need evaluation
             if let Value::String(s) = v {
-                 if s.contains("@[") || s.contains("<trigger") || s.contains("{{") || s.contains("{#") {
+                if s.contains("@[") || s.contains("<trigger") || s.contains("{{") || s.contains("{#") {
                     println!("String literal contains tags, re-parsing and evaluating: {:?}", s);
                     // Parse the string content as if it were a new input
                     let inner_resolved_nodes = { // Renamed from inner_ast for clarity
@@ -804,17 +811,17 @@ fn resolve_property_value_to_json<P: PluginBridge + Debug>(
                     // Combine their content into a single string
                     let mut combined_content = String::new();
                     for res_node in inner_resolved_nodes { // Iterate over Vec<Box<dyn WorldInfoNode>>
-                         match res_node.content() {
-                             Ok(content) => combined_content.push_str(&content),
-                             Err(e) => return Err(ParserError::ProcessorExecution(format!("Failed to get content from re-parsed string node: {}", e))),
-                         }
+                        match res_node.content() {
+                            Ok(content) => combined_content.push_str(&content),
+                            Err(e) => return Err(ParserError::ProcessorExecution(format!("Failed to get content from re-parsed string node: {}", e))),
+                        }
                     }
                     println!("Re-parsed string evaluated to: {:?}", combined_content);
                     Ok(Value::String(combined_content))
-                 } else {
+                } else {
                     // String literal has no tags, use it directly
                     Ok(v.clone())
-                 }
+                }
             } else {
                 // Not a string, just clone the literal value (Number, Bool, Null)
                 Ok(v.clone())
@@ -822,15 +829,15 @@ fn resolve_property_value_to_json<P: PluginBridge + Debug>(
         }
         // Handle nested arrays/objects stored in the AST
         AstNode::NestedArray(items) => {
-             println!("Resolving array property");
-             // Recursively resolve each AST node item in the array to a JSON value
+            println!("Resolving array property");
+            // Recursively resolve each AST node item in the array to a JSON value
             let resolved_items = items.iter()
                 .map(|item_node| resolve_property_value_to_json(item_node, registry /*, variable_scopes */))
                 .collect::<Result<Vec<_>, _>>()?; // Collect results into Vec<Value>
             Ok(Value::Array(resolved_items))
         }
         AstNode::NestedObject(props) => {
-             println!("Resolving object property");
+            println!("Resolving object property");
             // Recursively resolve the nested object's properties Vec<(String, AstNode)> into a JSON Value::Object
             resolve_properties_to_json(props, registry /*, variable_scopes */)
         }

@@ -132,10 +132,35 @@ mod tests {
     }
 
     #[test]
+    fn test_variables() {
+        use crate::core::processors::WorldInfoRegistry;
+        use crate::{WorldInfo, WorldInfoEntry, EntryFactory, WorldInfoFactory};
+        use std::sync::Arc;
+
+        let mut registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
+        registry.register_variable("global:test".to_string(), "test".into());
+
+        let input = r#"The variable's contents are "{{global:test}}"!"#;
+
+        let mut worldinfo = WorldInfo::new(Box::new(registry));
+
+        let mut entry = WorldInfoEntry::create("test", 0, 0);
+        entry.set_text(&input);
+
+        worldinfo.insert_entry(entry);
+
+        let evaluated_result = worldinfo.evaluate().unwrap();
+        println!("Evaluated result: {}", evaluated_result);
+
+        assert_eq!(evaluated_result, "The variable's contents are \"test\"!");
+    }
+    
+
+    #[test]
     fn test_invalid_processor() {
         use crate::{ParserError, WorldInfoError};
         use crate::core::processors::WorldInfoRegistry;
-        use crate::{WorldInfo, WorldInfoEntry, EntryFactory, WorldInfoFactory,};
+        use crate::{WorldInfo, WorldInfoEntry, EntryFactory, WorldInfoFactory};
         use std::sync::Arc;
 
         let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));

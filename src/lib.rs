@@ -177,23 +177,3 @@ pub trait WorldInfoNode: Debug {
 pub trait WorldInfoProcessor: WorldInfoNode {
     fn process(&self) -> Result<String, crate::WorldInfoError>;
 }
-
-#[derive(Debug, Clone)]
-struct TextNode {
-    content: String,
-}
-
-impl WorldInfoNode for TextNode {
-    fn content(&self) -> Result<String, crate::WorldInfoError> {
-        Ok(self.content.clone())
-    }
-    
-    fn name(&self) -> String {
-        "text".to_string()
-    }
-    
-    fn cloned(&self) -> Box<dyn WorldInfoNode> {
-        Box::new(self.to_owned())
-    }
-}
-

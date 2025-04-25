@@ -43,7 +43,7 @@ pub enum ParserError {
     #[error("Processing error: {0}")]
     Processing(String),
     #[error("Undefined variable: {0}")]
-    UndefinedVariable(String, String, String),
+    UndefinedVariable(String),
     #[error("Type error: {0}")]
     TypeError(String),
     #[error("Evaluation error: {0}")] // For variable/macro evaluation issues
