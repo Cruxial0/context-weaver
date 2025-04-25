@@ -1,4 +1,4 @@
-use core::processors::{PluginBridge, ProcessorRegistry};
+use core::processors::{PluginBridge, WorldInfoRegistry};
 use std::fmt::Debug;
 
 use parser::parse_entry_content;
@@ -19,7 +19,7 @@ pub struct WorldInfo<P: PluginBridge + 'static> {
     entries: Vec<WorldInfoEntry>,
     /// List of allowed processors
     permitted_processors: Vec<String>,
-    processor_registry: Box<ProcessorRegistry<P>>,
+    processor_registry: Box<WorldInfoRegistry<P>>,
     error_stack: Vec<WorldInfoError>,
 }
 
@@ -59,7 +59,7 @@ impl<P: PluginBridge> WorldInfo<P>{
 
 pub trait WorldInfoFactory<P: PluginBridge> {
     /// Creates a new empty world info
-    fn new(registry: Box<ProcessorRegistry<P>>) -> Self;
+    fn new(registry: Box<WorldInfoRegistry<P>>) -> Self;
     /// Sets the name of the world info
     fn set_name(&mut self, name: &str) -> &mut Self;
     /// Inserts a world info entry
@@ -79,7 +79,7 @@ pub trait WorldInfoFactory<P: PluginBridge> {
 }
 
 impl<P: PluginBridge> WorldInfoFactory<P> for WorldInfo<P> {
-    fn new(registry: Box<ProcessorRegistry<P>>) -> Self {
+    fn new(registry: Box<WorldInfoRegistry<P>>) -> Self {
         WorldInfo {
             name: String::new(),
             entries: Vec::new(),
@@ -146,14 +146,14 @@ impl WorldInfoEntry {
 pub trait EntryFactory {
     fn create(name: &str, id: u32, order: u32) -> WorldInfoEntry;
     fn set_text(&mut self, text: &str) -> &mut WorldInfoEntry;
-    fn parse<P: PluginBridge>(&mut self, registry: &ProcessorRegistry<P>) -> Result<&mut WorldInfoEntry, WorldInfoError>;
+    fn parse<P: PluginBridge>(&mut self, registry: &WorldInfoRegistry<P>) -> Result<&mut WorldInfoEntry, WorldInfoError>;
 }
 
 impl EntryFactory for WorldInfoEntry {
     fn create(name: &str, id: u32, order: u32) -> WorldInfoEntry {
         WorldInfoEntry::new(name.to_string(), id, order)
     }
-    fn parse<P: PluginBridge>(&mut self, registry: &ProcessorRegistry<P>) -> Result<&mut WorldInfoEntry, WorldInfoError> {
+    fn parse<P: PluginBridge>(&mut self, registry: &WorldInfoRegistry<P>) -> Result<&mut WorldInfoEntry, WorldInfoError> {
         println!("Parsing node: {:?}", self.text);
         match parse_entry_content(&self.text, registry) {
             Ok(nodes) => self.nodes = nodes,

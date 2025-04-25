@@ -3,21 +3,21 @@ use serde::de::DeserializeOwned;
 use crate::{WorldInfoNode, WorldInfoProcessor};
 use std::fmt::Debug;
 
-pub struct ProcessorRegistry<P: PluginBridge + 'static> {
-    registry: RwLock<HashMap<String, Box<dyn WorldInfoProcessorFactory<P>>>>,
+pub struct WorldInfoRegistry<P: PluginBridge + 'static> {
+    processor_factories: RwLock<HashMap<String, Box<dyn WorldInfoProcessorFactory<P>>>>,
     plugin_bridge: Arc<P>,
 }
 
-impl<P: PluginBridge + 'static> ProcessorRegistry<P> {
+impl<P: PluginBridge + 'static> WorldInfoRegistry<P> {
     pub fn new(plugin_bridge: Arc<P>) -> Self {
         Self {
-            registry: RwLock::new(HashMap::new()),
+            processor_factories: RwLock::new(HashMap::new()),
             plugin_bridge,
         }
     }
 
     pub fn register_processor(&self, name: &str, factory: Box<dyn WorldInfoProcessorFactory<P>>) {
-        self.registry.write().unwrap().insert(name.to_string(), factory);
+        self.processor_factories.write().unwrap().insert(name.to_string(), factory);
     }
 
     pub fn register_plugin_processor(&self, author: &str, name: &str) {
@@ -25,7 +25,7 @@ impl<P: PluginBridge + 'static> ProcessorRegistry<P> {
     }
 
     pub fn instantiate_processor(&self, name: &str, props: &serde_json::Value) -> Option<Box<dyn WorldInfoNode>> {
-        let registry = self.registry.read().unwrap();
+        let registry = self.processor_factories.read().unwrap();
         registry.get(name).map(|factory| factory.create(props, &self.plugin_bridge) as Box<dyn WorldInfoNode>)
     }
 

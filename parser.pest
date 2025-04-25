@@ -1,54 +1,104 @@
+// Grammar for parsing text with embedded processors, triggers, variables, and macros.
+
+// --- Entry Point & Basic Structure ---
+input = { SOI ~ (macro_tag | processor_tag_content | trigger_tag_content | variable_tag_content | text)* ~ EOI }
+
+// --- Whitespace and Comments (ignored in most places via `_`) ---
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
-COMMENT = _{ "//" ~ (!"\n" ~ ANY)* } // Example: Allow // comments if needed
 
-input = { SOI ~ (text | processor_tag | trigger_tag)* ~ EOI }
-text = @{ (!(processor_start | trigger_start) ~ ANY)+ }
+// --- Text Node ---
+text = @{ (!("@[" | "<trigger" | "{{" | "{#") ~ ANY)+ }
 
-// == Processor Tag: @[name(properties)] ==
-processor_start = { "@[" }
-processor_tag = { processor_start ~ processor_name ~ "(" ~ properties? ~ ")" ~ "]" }
-processor_name = @{ (ASCII_ALPHANUMERIC | "." | "_")+ }
+// --- Processor Tag: @[name(props)] ---
+// Non-atomic content rule for top-level matching
+processor_tag_content = { processor_start ~ processor_name ~ ( "(" ~ properties? ~ ")" )? ~ processor_end }
+processor_start = @{ "@[" }
+processor_name = @{ identifier ~ ("." ~ identifier)* }
+processor_end = @{ "]" }
+// Atomic rule for use inside properties/expressions
+processor_tag = @{ processor_start ~ processor_name ~ ( "(" ~ properties? ~ ")" )? ~ processor_end }
 
-// == Trigger Tag: <trigger id=...> ==
-trigger_start = { "<trigger" }
-trigger_tag = { trigger_start ~ trigger_attributes? ~ ">" }
-trigger_attributes = { trigger_attribute+ }
-trigger_attribute = { attribute_key ~ "=" ~ attribute_value }
-attribute_key = @{ ASCII_ALPHANUMERIC+ }
-attribute_value = @{ "\"" ~ ( !"\"" ~ ANY )* ~ "\"" | "'" ~ ( !"'" ~ ANY )* ~ "'" | (!(">" | WHITESPACE) ~ ANY)+ }
 
-// == Properties (Pseudo-JSON, used everywhere) ==
-properties = { property ~ ("," ~ property)* }
-property = { property_key ~ ":" ~ property_value }
-// Keys are unquoted identifiers
-property_key = @{ (ASCII_ALPHANUMERIC | "_")+ } // Allow underscore
+// --- Trigger Tag: <trigger id=X> ---
+// Non-atomic content rule for top-level matching
+trigger_tag_content = { trigger_start ~ trigger_attributes? ~ trigger_end }
+trigger_start = @{ "<trigger" }
+trigger_attributes = { WHITESPACE+ ~ trigger_attribute ~ (WHITESPACE+ ~ trigger_attribute)* ~ WHITESPACE* }
+trigger_attribute = { trigger_key ~ "=" ~ trigger_value }
+trigger_key = @{ "id" }
+trigger_value = _{ quoted_string }
+trigger_end = @{ ">" }
+// Atomic rule (if needed elsewhere, though not currently used in properties)
+// trigger_tag = @{ trigger_start ~ trigger_attributes? ~ trigger_end }
 
-// Value can be various types, including nested objects/arrays using the SAME property rules
-// `property_value` itself is silent, meaning the parser yields the token matched by one of the options inside.
+
+// --- Scoped Variable: {{scope:name}} ---
+// Non-atomic content rule for top-level matching
+variable_tag_content = { variable_start ~ scope ~ variable_separator ~ name ~ variable_end }
+variable_start = @{ "{{" }
+scope = @{ identifier }
+variable_separator = @{ ":" }
+name = @{ identifier }
+variable_end = @{ "}}" }
+// Atomic rule for use inside properties/expressions
+variable = @{ variable_start ~ scope ~ variable_separator ~ name ~ variable_end }
+
+
+// --- Macros: {# if ... #}, {# foreach ... #} ---
+macro_tag = { macro_if | macro_foreach } // Non-atomic container
+
+// If Macro: {# if condition #} ... {# else #} ... {# endif #}
+macro_if = { macro_if_start ~ expression ~ macro_tag_end ~ inner_nodes ~ macro_else? ~ macro_endif }
+macro_if_start = @{ "{# if" ~ WHITESPACE+ }
+macro_else = { macro_else_tag ~ inner_nodes }
+macro_else_tag = @{ "{# else #}" }
+macro_endif = @{ "{# endif #}" }
+
+// Foreach Macro: {# foreach item in collection #} ... {# endforeach #}
+macro_foreach = { macro_foreach_start ~ identifier ~ WHITESPACE+ ~ "in" ~ WHITESPACE+ ~ expression ~ macro_tag_end ~ inner_nodes ~ macro_endforeach }
+macro_foreach_start = @{ "{# foreach" ~ WHITESPACE+ }
+macro_endforeach = @{ "{# endforeach #}" }
+
+macro_tag_end = @{ WHITESPACE* ~ "#}" }
+// Ensure inner_nodes can parse the top-level tag content rules
+inner_nodes = { (macro_tag | processor_tag_content | trigger_tag_content | variable_tag_content | text)* }
+
+
+// --- Expressions (Simplified) ---
+expression = _{ variable | literal } // Uses atomic `variable` rule
+
+// --- Properties for Processors (Pseudo-JSON) ---
+properties = { property ~ (WHITESPACE* ~ "," ~ WHITESPACE* ~ property)* ~ WHITESPACE* }
+property = { property_key ~ WHITESPACE* ~ ":" ~ WHITESPACE* ~ property_value }
+property_key = @{ identifier | quoted_string }
+// Uses atomic tags/variable rule within properties
 property_value = _{
-    processor_tag | // Nested processor evaluation
-    string |
-    number |
-    boolean |
-    object |        // <<<< Generic object rule (uses `properties`)
-    array  |        // <<<< Generic array rule (uses `property_value`)
-    null            // <<<< Added null
+    processor_tag // Atomic processor tag @[...]
+    | variable    // Atomic variable tag {{...}}
+    | object
+    | array
+    | literal
 }
 
-// Generic Object (uses the main 'properties' rule with unquoted keys)
-object = { "{" ~ properties? ~ "}" } // <<<< Contains optional 'properties'
-
-// Generic Array (elements are 'property_value')
-array = { "[" ~ (property_value ~ ("," ~ property_value)*)? ~ "]" }
+// --- Literals ---
+literal = _{ string | number | boolean | null }
+string = _{ quoted_string }
+number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ (^"e" | ^"E")? ~ ("+" | "-")? ~ ASCII_DIGIT* }
+boolean = @{ "true" | "false" }
 null = @{ "null" }
 
-// == Basic Value Types == (shared)
-string = @{ "\"" ~ inner ~ "\"" }
-inner = { (escape | !("\"" | "\\") ~ ANY)* }
-escape = { "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t" | unicode) }
-unicode = { "u" ~ HEX_DIGIT{4} }
-number = @{ "-"? ~ int ~ ("." ~ ASCII_DIGIT+)? ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
-int = { "0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT* }
-boolean = @{ "true" | "false" }
+// --- Reusable Primitives ---
+identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+quoted_string = _{ "\"" ~ string_content? ~ "\"" }
+string_content = @{ (escape | !("\"" | "\\") ~ ANY)+ }
+escape = { "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t" | "u" ~ ASCII_HEX_DIGIT{4}) }
 
-// PEST built-ins assumed: SOI, EOI, ANY, ASCII_ALPHANUMERIC, ASCII_DIGIT, ASCII_NONZERO_DIGIT, HEX_DIGIT
+// --- Object and Array (Pseudo-JSON within properties) ---
+object = { "{" ~ WHITESPACE* ~ properties? ~ WHITESPACE* ~ "}" }
+array = { "[" ~ WHITESPACE* ~ (property_value ~ (WHITESPACE* ~ "," ~ WHITESPACE* ~ property_value)*)? ~ WHITESPACE* ~ "]" }
+
+// --- Character Classes ---
+ASCII_ALPHA = _{ 'a'..'z' | 'A'..'Z' }
+ASCII_DIGIT = _{ '0'..'9' }
+ASCII_HEX_DIGIT = _{ '0'..'9' | 'a'..'f' | 'A'..'F' }
+ASCII_ALPHANUMERIC = _{ ASCII_ALPHA | ASCII_DIGIT }

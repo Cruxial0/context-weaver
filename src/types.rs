@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::convert::TryInto;
 
-#[derive(Clone, Debug)]
+use serde::Serialize;
+
+#[derive(Clone, Debug, Serialize)]
 pub enum WorldInfoType {
     String(String),
     Boolean(bool),
@@ -11,7 +13,7 @@ pub enum WorldInfoType {
     Null
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub enum Number {
     Int(i64),
     UInt(u64),

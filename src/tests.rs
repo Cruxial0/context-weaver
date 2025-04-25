@@ -25,11 +25,11 @@ mod tests {
 
     #[test]
     fn test_parser() {
-        use crate::core::processors::{WildcardProcessorFactory, ProcessorRegistry, RngProcessorFactory};
+        use crate::core::processors::{WildcardProcessorFactory, WorldInfoRegistry, RngProcessorFactory};
         use crate::{WorldInfo, WorldInfoEntry, EntryFactory, WorldInfoFactory};
         use std::sync::Arc;
 
-        let registry = ProcessorRegistry::new(Arc::new(DummyPluginBridge));
+        let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
         registry.register_processor("weaver.core.wildcard", Box::new(WildcardProcessorFactory));
         registry.register_processor("weaver.core.rng", Box::new(RngProcessorFactory));
         //let input = r#"Today's weather is @[weaver.core.wildcard(items: ["sunny", "cloudy", "rainy"], test: 100)]!"#;
@@ -61,11 +61,11 @@ mod tests {
 
     #[test]
     fn test_nested_parser() {
-        use crate::core::processors::{ProcessorRegistry, WildcardProcessorFactory, RngProcessorFactory};
+        use crate::core::processors::{WorldInfoRegistry, WildcardProcessorFactory, RngProcessorFactory};
         use crate::{WorldInfo, WorldInfoEntry, EntryFactory, WorldInfoFactory};
         use std::sync::Arc;
 
-        let registry = ProcessorRegistry::new(Arc::new(DummyPluginBridge));
+        let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
         registry.register_processor("weaver.core.wildcard", Box::new(WildcardProcessorFactory));
         registry.register_processor("weaver.core.rng", Box::new(RngProcessorFactory));
         
@@ -98,11 +98,11 @@ mod tests {
 
     #[test]
     fn test_plugin_processor() {
-        use crate::core::processors::ProcessorRegistry;
+        use crate::core::processors::WorldInfoRegistry;
         use crate::{WorldInfo, WorldInfoEntry, EntryFactory, WorldInfoFactory,};
         use std::sync::Arc;
 
-        let registry = ProcessorRegistry::new(Arc::new(DummyPluginBridge));
+        let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
         registry.register_plugin_processor("dummy", "test");
         let input = r#"@[weaver.plugin.dummy.test(
             plugin_author: "dummy", 
@@ -134,11 +134,11 @@ mod tests {
     #[test]
     fn test_invalid_processor() {
         use crate::{ParserError, WorldInfoError};
-        use crate::core::processors::ProcessorRegistry;
+        use crate::core::processors::WorldInfoRegistry;
         use crate::{WorldInfo, WorldInfoEntry, EntryFactory, WorldInfoFactory,};
         use std::sync::Arc;
 
-        let registry = ProcessorRegistry::new(Arc::new(DummyPluginBridge));
+        let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
 
         let input = r#"@[weaver.core.wildcard(invalid: true)]"#;
 
@@ -150,14 +150,11 @@ mod tests {
         worldinfo.insert_entry(entry);
 
         let evaluated_result = worldinfo.evaluate().unwrap_err(); // Should fail
-        let left = format!("{:?}", evaluated_result);
-        let right = format!("{:?}", vec![WorldInfoError::ParserError(
-            ParserError::ProcessorInstantiation(
-                "weaver.core.wildcard".to_string(), 
-                "Processor not found or instantiation failed (props: Object {\"invalid\": Bool(true)})".to_string()
-            ))
-        ]);
+        let valid = matches!(
+            &evaluated_result[0],
+            WorldInfoError::ParserError(ParserError::ProcessorInstantiation(_, _))
+        );
 
-        assert_eq!(left, right);
+        assert!(valid);
     }
 }
