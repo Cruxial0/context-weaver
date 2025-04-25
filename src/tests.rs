@@ -155,6 +155,35 @@ mod tests {
         assert_eq!(evaluated_result, "The variable's contents are \"test\"!");
     }
     
+    #[test]
+    fn test_if_macro() {
+        use crate::core::processors::WorldInfoRegistry;
+        use crate::{WorldInfo, WorldInfoEntry, EntryFactory, WorldInfoFactory};
+        use std::sync::Arc;
+
+        let mut registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
+        registry.register_variable("global:test".to_string(), true.into());
+
+        let input = r#"
+        {# if {{global:test}} == true #}
+            It seems the variable is true!
+        {# else #}
+            It seems the variable is false!
+        {# endif #}
+        "#;
+
+        let mut worldinfo = WorldInfo::new(Box::new(registry));
+
+        let mut entry = WorldInfoEntry::create("test", 0, 0);
+        entry.set_text(&input);
+
+        worldinfo.insert_entry(entry);
+
+        let evaluated_result = worldinfo.evaluate().unwrap();
+        println!("Evaluated result: {}", evaluated_result);
+
+        assert_eq!(evaluated_result, "It seems the variable is true!");
+    }
 
     #[test]
     fn test_invalid_processor() {

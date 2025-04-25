@@ -13,8 +13,9 @@ impl VariableNode {
 
 impl WorldInfoNode for VariableNode {
     fn content(&self) -> Result<String, crate::WorldInfoError> {
-        match self.value {
+        match &self.value {
             serde_json::Value::Null => Ok("".to_string()),
+            serde_json::Value::String(s) => Ok(s.replace("\"", "").to_string()),
             _ => Ok(self.value.to_string())
         }
     }

@@ -40,7 +40,7 @@ scope = @{ identifier }
 variable_separator = @{ ":" }
 name = @{ identifier }
 variable_end = @{ "}}" }
-// Atomic rule for use inside properties/expressions
+// Atomic rule for use inside properties/expressions and expressions
 variable = @{ variable_start ~ scope ~ variable_separator ~ name ~ variable_end }
 
 
@@ -55,6 +55,7 @@ macro_else_tag = @{ "{# else #}" }
 macro_endif = @{ "{# endif #}" }
 
 // Foreach Macro: {# foreach item in collection #} ... {# endforeach #}
+// Note: The collection part now also uses the enhanced 'expression' rule
 macro_foreach = { macro_foreach_start ~ identifier ~ WHITESPACE+ ~ "in" ~ WHITESPACE+ ~ expression ~ macro_tag_end ~ inner_nodes ~ macro_endforeach }
 macro_foreach_start = @{ "{# foreach" ~ WHITESPACE+ }
 macro_endforeach = @{ "{# endforeach #}" }
@@ -64,8 +65,30 @@ macro_tag_end = @{ WHITESPACE* ~ "#}" }
 inner_nodes = { (macro_tag | processor_tag_content | trigger_tag_content | variable_tag_content | text)* }
 
 
-// --- Expressions (Simplified) ---
-expression = _{ variable | literal } // Uses atomic `variable` rule
+// --- Expressions (Enhanced for Comparisons and Logic) ---
+// Use Pest's built-in precedence climber
+expression = {
+    logical_or
+}
+
+// Define operator precedence levels
+logical_or = { logical_and ~ ( or_op ~ logical_and )* }
+logical_and = { comparison ~ ( and_op ~ comparison )* }
+comparison = { term ~ ( comp_op ~ term )* }
+// Add other levels like addition/subtraction, multiplication/division if needed later
+
+// Basic term: literals, variables, negation, or grouped expressions
+term = _{ literal | variable | negation | "(" ~ expression ~ ")" }
+
+// Operator Rules
+comp_op = @{ "==" | "!=" | "<=" | ">=" | "<" | ">" }
+and_op = @{ "&&" }
+or_op = @{ "||" }
+not_op = @{ "!" }
+
+// Negation (Unary Prefix Operator)
+negation = { not_op ~ term }
+
 
 // --- Properties for Processors (Pseudo-JSON) ---
 properties = { property ~ (WHITESPACE* ~ "," ~ WHITESPACE* ~ property)* ~ WHITESPACE* }
@@ -77,12 +100,12 @@ property_value = _{
     | variable    // Atomic variable tag {{...}}
     | object
     | array
-    | literal
+    | literal     // Allow simple literals directly
 }
 
 // --- Literals ---
 literal = _{ string | number | boolean | null }
-string = _{ quoted_string }
+string = _{ quoted_string } // string is silent, matches quoted_string
 number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ (^"e" | ^"E")? ~ ("+" | "-")? ~ ASCII_DIGIT* }
 boolean = @{ "true" | "false" }
 null = @{ "null" }
