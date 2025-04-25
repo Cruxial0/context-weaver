@@ -37,19 +37,20 @@ The generated number is: 73
 
 `ContextWeaver` uses a flexible pseudo-JSON format for defining processor properties and other components. The key difference from standard JSON is that property keys are **unquoted**, and attributes can be used alongside properties:
 
-```javascript
+```json
 // Standard JSON
 {
   "property": "value"
 }
 ```
 
-```javascript
+```json
 // ContextWeaver pseudo-JSON
 {
-  property: "value", // Unquoted key
-  attribute="value"  // Attribute style also supported
+  property: "value", // Unquoted keys in properties
 }
+
+<trigger id=0> // Attributes in tags
 ```
 
 The real power emerges when you **nest** processors within each other:
@@ -87,7 +88,7 @@ Extend `ContextWeaver` with your own custom logic through **plugins**. By implem
 Here's how you might define a bridge in Rust to connect your plugin system:
 
 ```rust
-use weaver_world_info::{PluginBridge, ProcessorResult}; // Assuming ProcessorResult is the return type
+use context_weaver::core::processors::PluginBridge;
 use serde_json::Value;
 use std::sync::Arc;
 use rand::Rng; // For the dummy logic
@@ -95,11 +96,9 @@ use rand::Rng; // For the dummy logic
 #[derive(Clone)]
 struct MyCustomPluginBridge;
 
-// Define your unique identifier type for plugins
-type MyPluginId = u32;
-
 impl PluginBridge for MyCustomPluginBridge {
-    type PluginId = MyPluginId;
+    // Define your unique identifier type for plugins
+    type PluginId = u32;
 
     fn invoke_plugin(&self, plugin_id: Self::PluginId, properties: serde_json::Value) -> Result<String, WorldInfoError> {
         // Lookup plugin by ID. Your implementation would likely be more complex
@@ -137,10 +136,8 @@ fn dummy_plugin_logic(properties: Value) -> Result<String, WorldInfoError> {
 To use your custom plugin, register it with the `ProcessorRegistry` and provide your bridge implementation:
 
 ```rust
-use weaver_world_info::{WorldInfo, WorldInfoEntry, ProcessorRegistry, plugin::PluginProcessorFactory};
+use weaver_world_info::{WorldInfo, WorldInfoEntry, ProcessorRegistry};
 use std::sync::Arc;
-// Assuming the bridge and dummy logic from the previous example are accessible
-// use crate::MyCustomPluginBridge; // If in another module
 
 // 1. Create the registry, providing an instance of your bridge
 let my_bridge = Arc::new(MyCustomPluginBridge);
@@ -155,22 +152,24 @@ let input = r#"@[weaver.plugin.dummy.test(
     plugin_author: "dummy", // Required
     plugin_name: "test",    // Required
     plugin_id: 0,           // Required
-    items: ["sunny", "cloudy", "rainy"] // Optional, Custom properties for your logic
+    plugin_data: {          // Optional, arbitrary plugin data
+        items: ["sunny", "cloudy", "rainy"] 
+    }
     )]"#;
 
 // 4. Setup WorldInfo and evaluate
 let mut worldinfo = WorldInfo::new(Box::new(registry));
-let mut entry = WorldInfoEntry::create("test_entry", 0, 0); // Name, priority, order
+let mut entry = WorldInfoEntry::create("test_entry", 0, 0);
 entry.set_text(&input);
 worldinfo.insert_entry(entry);
 
-match worldinfo.evaluate() { // Assuming evaluate returns a Result
+match worldinfo.evaluate() { 
     Ok(evaluated_result) => {
         println!("Evaluated Result: {}", evaluated_result);
         // Example Output: Evaluated Result: The plugin's forecast is: cloudy
     }
     Err(e) => {
-        eprintln!("Evaluation Error: {}", e);
+        eprintln!("Evaluation Error: {}", e[0]); // Evaluate returns an array of errors
     }
 }
 
@@ -228,9 +227,13 @@ Here's a look at planned features and current progress:
 - [ ] Frequency controls (e.g., insert only once, insert every N turns)
 
 ### 🪄 Macro & Templating System
-- [ ] Conditional blocks (`{{if}}` / `{{else}}`)
-- [ ] Scoped variables (`{global:char}`, `{entry:activations}`)
-- [ ] Variable mutation ()
+- [x] Conditional blocks (`{{if}}` / `{{else}}`)
+- [ ] Extended conditional statements
+    - [ ] Array.length | String.length
+    - [ ] Array.contains
+    - [ ] Math operators (`*`, `/`)
+- [x] Scoped variables (`{global:char}`, `{entry:activations}`)
+- [ ] Variable mutation (`@[set(global:foo, "bar")]`, `@[modify(entry:user_score, operation='add', value=10)]`)
 - [ ] Value piping/formatting functions (e.g., `{{variable | uppercase}}`)
 - [ ] Triggers (macros that can activate other entries)
 
@@ -239,6 +242,17 @@ Here's a look at planned features and current progress:
 - [x] Structured syntax parsing implemented
 - [x] Enhanced diagnostics for syntax errors
 - [x] Robust error reporting with clear messages and locations
+
+### Planned Syntax
+| Type                  | Syntax                                              | Supported |
+|-----------------------|-----------------------------------------------------|-----------|
+| Processor             | @[processor.name(..properties)]                     | Yes       |
+| Trigger               | <trigger id=0>                                      | Yes*      |
+| If Macro              | {# if foo = bar #} baz {# endif #}                  | Yes*      |
+| Foreach Macro         | {# foreach foo in bar #} baz(foo) {# endforeach #}  | No        |
+| Variable Manipulation | @[set(var, value)]; @[modify(var, op, change)]; ... | No        |
+
+> * Incomplete or partly supported
 
 ---
 
