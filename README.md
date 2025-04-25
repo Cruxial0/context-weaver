@@ -79,6 +79,46 @@ This nesting allows for complex, emergent text generation based on combining sim
 
 ---
 
+### Variables
+Variables are simple key-value pairs that can be inserted anywhere in your input, from directly in the text, to the input of a separate processor. Conceptually speaking, a variable can be used everywhere, however, realistically they should be used with caution. The type of a variable is not known until evaluation, and is computed at evaluation-time, meaning that if used as an input for a processor that does not properly handle mismatched types, it may fail.
+
+> ![INFO]
+> All core processors handle type mismatch gracefully
+
+The syntax is as follows:
+```
+{{SCOPE:VAR_NAME}}
+```
+Every entry has access to two scopes: `global` and `ENTRY_ID` (where `ENTRY_ID` is the actual ID of the entry). Variables defined within the `ENTRY_ID` scope can only be accessed from within that specific entry, while `global`-scoped variables can be accessed everywhere. If you are in for some reason in need for additional scopes, custom scopes are planned down the road.
+
+### Macros
+Macros allow you to execute chains of more complex commands. The syntax of a macro varies from type-to-type, but all are contained within `{# ... #}` closures.
+
+#### If-Macro
+If Macros are simple if/else statements. The syntax is defined as:
+```
+{# if CONDITION #}
+    [CONTENT]
+({# else #})
+    ([CONTENT])
+{# endif #}
+```
+The condition can be more or less anything. It supports all binary operators, aswell as arthimetic operators. You can nest/group conditions within eachother, and use variables with the same syntax as stated above. You also have access to the following functions:
+| Function       | Input                        | Returns                             |
+|----------------|------------------------------|-------------------------------------|
+| len(x)         | x: String, List, HashMap     | Length of the provided item `(Int)` |
+| contains(x, y) | x: String, List<br>y: String | Whether `x` contains `y` `(Bool)`   |
+
+#### Foreach Macro
+A foreach macro allows you to perform iterative logic over a collection. Supported types include: `Lists`, `HashMaps` and `Strings`. Remember that all collections (apart from `Strings`) are loosely typed, meaning a collection may include mixed types.
+
+The syntax is defined as:
+```
+{# foreach VAR_NAME in COLLECTION #}
+    [ITERATIVE LOGIC (using VAR_NAME)]
+{# endforeach #}
+```
+
 ## 🔌 Plugin Support
 
 Extend `ContextWeaver` with your own custom logic through **plugins**. By implementing a simple bridge interface, you can define and call your own processors.
@@ -231,8 +271,9 @@ Here's a look at planned features and current progress:
 - [ ] Extended conditional statements
     - [ ] Array.length | String.length
     - [ ] Array.contains
-    - [ ] Math operators (`*`, `/`)
+    - [ ] Arthimetic operators (`+`, `-`, `*`, `/`)
 - [x] Scoped variables (`{global:char}`, `{entry:activations}`)
+- [ ] Custom scopes (tag system?)
 - [ ] Variable mutation (`@[set(global:foo, "bar")]`, `@[modify(entry:user_score, operation='add', value=10)]`)
 - [ ] Value piping/formatting functions (e.g., `{{variable | uppercase}}`)
 - [ ] Triggers (macros that can activate other entries)
