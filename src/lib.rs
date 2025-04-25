@@ -4,15 +4,12 @@ use std::fmt::Debug;
 use parser::parse_entry_content;
 
 pub mod core;
-pub mod types;
 pub mod errors;
+pub mod id;
 mod parser;
 mod tests;
 
-pub use types::WorldInfoType;
 pub use errors::{ParserError, WorldInfoError};
-
-
 
 pub struct WorldInfo<P: PluginBridge + 'static> {
     name: String,
@@ -21,6 +18,7 @@ pub struct WorldInfo<P: PluginBridge + 'static> {
     permitted_processors: Vec<String>,
     processor_registry: Box<WorldInfoRegistry<P>>,
     error_stack: Vec<WorldInfoError>,
+    id_generator: id::IdGenerator
 }
 
 impl<P: PluginBridge> WorldInfo<P>{
@@ -62,6 +60,8 @@ pub trait WorldInfoFactory<P: PluginBridge> {
     fn new(registry: Box<WorldInfoRegistry<P>>) -> Self;
     /// Sets the name of the world info
     fn set_name(&mut self, name: &str) -> &mut Self;
+    /// Creates a new world info entry with a random id and inserts it
+    fn new_entry(&mut self, name: &str, order: u32) -> &mut WorldInfoEntry;
     /// Inserts a world info entry
     fn insert_entry(&mut self, entry: WorldInfoEntry) -> &mut Self;
     /// Sets the list of permitted processors
@@ -76,6 +76,8 @@ pub trait WorldInfoFactory<P: PluginBridge> {
         }
         self
     }
+
+    
 }
 
 impl<P: PluginBridge> WorldInfoFactory<P> for WorldInfo<P> {
@@ -85,7 +87,8 @@ impl<P: PluginBridge> WorldInfoFactory<P> for WorldInfo<P> {
             entries: Vec::new(),
             permitted_processors: Vec::new(),
             processor_registry: registry,
-            error_stack: Vec::new()
+            error_stack: Vec::new(),
+            id_generator: id::IdGenerator::new(6)
         }
     }
     fn set_name(&mut self, name: &str) -> &mut Self {
@@ -103,20 +106,38 @@ impl<P: PluginBridge> WorldInfoFactory<P> for WorldInfo<P> {
     fn build(&self) -> &WorldInfo::<P> {
         self
     }
+    
+    fn new_entry(&mut self, name: &str, order: u32) -> &mut WorldInfoEntry {
+        let id = self.id_generator.generate_unique(&self.entries.iter().map(|e| e.id()).collect());
+        let entry = WorldInfoEntry::create(name, id.clone(), order);
+        self.insert_entry(entry);
+        
+        self.entries.last_mut().unwrap()
+    }
 }
 
 pub struct WorldInfoEntry {
     name: String,
-    id: u32,
+    id: String,
     order: u32,
     nodes: Vec<Box<dyn WorldInfoNode>>,
+    scopes: Vec<String>,
     text: String
 }
 
 
 impl WorldInfoEntry {
-    pub fn new(name: String, id: u32, order: u32) -> Self {
-        Self { name, id, order, nodes: Vec::new(), text: String::new() }
+    pub fn new(name: String, id: String, order: u32) -> Self {
+        Self 
+        { 
+            name, 
+            id: id.clone(), 
+            order, 
+            nodes: 
+            Vec::new(), 
+            text: String::new() ,
+            scopes: vec!["global".to_string(), id]
+        }
     }
 
     pub fn evalute(&self) -> Result<String, crate::WorldInfoError> {
@@ -134,8 +155,8 @@ impl WorldInfoEntry {
         self.name.clone()
     }
 
-    pub fn id(&self) -> u32 {
-        self.id
+    pub fn id(&self) -> String {
+        self.id.clone()
     }
 
     pub fn order(&self) -> u32 {
@@ -144,13 +165,13 @@ impl WorldInfoEntry {
 }
 
 pub trait EntryFactory {
-    fn create(name: &str, id: u32, order: u32) -> WorldInfoEntry;
+    fn create(name: &str, id: String, order: u32) -> WorldInfoEntry;
     fn set_text(&mut self, text: &str) -> &mut WorldInfoEntry;
     fn parse<P: PluginBridge>(&mut self, registry: &WorldInfoRegistry<P>) -> Result<&mut WorldInfoEntry, WorldInfoError>;
 }
 
 impl EntryFactory for WorldInfoEntry {
-    fn create(name: &str, id: u32, order: u32) -> WorldInfoEntry {
+    fn create(name: &str, id: String, order: u32) -> WorldInfoEntry {
         WorldInfoEntry::new(name.to_string(), id, order)
     }
     fn parse<P: PluginBridge>(&mut self, registry: &WorldInfoRegistry<P>) -> Result<&mut WorldInfoEntry, WorldInfoError> {

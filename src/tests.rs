@@ -26,7 +26,7 @@ mod tests {
     #[test]
     fn test_parser() {
         use crate::core::processors::{WildcardProcessorFactory, WorldInfoRegistry, RngProcessorFactory};
-        use crate::{WorldInfo, WorldInfoEntry, EntryFactory, WorldInfoFactory};
+        use crate::{WorldInfo, EntryFactory, WorldInfoFactory};
         use std::sync::Arc;
 
         let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
@@ -37,10 +37,8 @@ mod tests {
 
         let mut worldinfo = WorldInfo::new(Box::new(registry));
 
-        let mut entry = WorldInfoEntry::create("test", 0, 0);
+        let entry = worldinfo.new_entry("test", 0);
         entry.set_text(input);
-
-        worldinfo.insert_entry(entry);
 
         let mut valid_results = vec![];
         for i in 0..100 {
@@ -62,7 +60,7 @@ mod tests {
     #[test]
     fn test_nested_parser() {
         use crate::core::processors::{WorldInfoRegistry, WildcardProcessorFactory, RngProcessorFactory};
-        use crate::{WorldInfo, WorldInfoEntry, EntryFactory, WorldInfoFactory};
+        use crate::{WorldInfo, EntryFactory, WorldInfoFactory};
         use std::sync::Arc;
 
         let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
@@ -72,11 +70,9 @@ mod tests {
         let input = r#"Today's weather is @[weaver.core.wildcard(items: ["sunny", "cloudy", "random: @[weaver.core.rng(min: 0, max: 100)]"])]!"#;
 
         let mut worldinfo = WorldInfo::new(Box::new(registry));
-
-        let mut entry = WorldInfoEntry::create("test", 0, 0);
+        let entry = worldinfo.new_entry("test", 0);
         entry.set_text(&input);
 
-        worldinfo.insert_entry(entry);
         println!("Number of nodes: {}", worldinfo.entries[0].nodes.len());
 
         let mut valid_results = vec![
@@ -99,7 +95,7 @@ mod tests {
     #[test]
     fn test_plugin_processor() {
         use crate::core::processors::WorldInfoRegistry;
-        use crate::{WorldInfo, WorldInfoEntry, EntryFactory, WorldInfoFactory,};
+        use crate::{WorldInfo, EntryFactory, WorldInfoFactory,};
         use std::sync::Arc;
 
         let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
@@ -113,11 +109,9 @@ mod tests {
             }
             )]!"#;
         let mut worldinfo = WorldInfo::new(Box::new(registry));
+        let entry = worldinfo.new_entry("test", 0);
 
-        let mut entry = WorldInfoEntry::create("test", 0, 0);
         entry.set_text(&input);
-
-        worldinfo.insert_entry(entry);
 
         let evaluated_result = worldinfo.evaluate().unwrap();
         println!("Evaluated result: {}", evaluated_result);
@@ -134,7 +128,7 @@ mod tests {
     #[test]
     fn test_variables() {
         use crate::core::processors::WorldInfoRegistry;
-        use crate::{WorldInfo, WorldInfoEntry, EntryFactory, WorldInfoFactory};
+        use crate::{WorldInfo, EntryFactory, WorldInfoFactory};
         use std::sync::Arc;
 
         let mut registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
@@ -143,11 +137,9 @@ mod tests {
         let input = r#"The variable's contents are "{{global:test}}"!"#;
 
         let mut worldinfo = WorldInfo::new(Box::new(registry));
+        let entry = worldinfo.new_entry("test", 0);
 
-        let mut entry = WorldInfoEntry::create("test", 0, 0);
         entry.set_text(&input);
-
-        worldinfo.insert_entry(entry);
 
         let evaluated_result = worldinfo.evaluate().unwrap();
         println!("Evaluated result: {}", evaluated_result);
@@ -158,7 +150,7 @@ mod tests {
     #[test]
     fn test_if_macro() {
         use crate::core::processors::WorldInfoRegistry;
-        use crate::{WorldInfo, WorldInfoEntry, EntryFactory, WorldInfoFactory};
+        use crate::{WorldInfo, EntryFactory, WorldInfoFactory};
         use std::sync::Arc;
 
         let mut registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
@@ -173,11 +165,9 @@ mod tests {
         "#;
 
         let mut worldinfo = WorldInfo::new(Box::new(registry));
+        let entry = worldinfo.new_entry("test", 0);
 
-        let mut entry = WorldInfoEntry::create("test", 0, 0);
         entry.set_text(&input);
-
-        worldinfo.insert_entry(entry);
 
         let evaluated_result = worldinfo.evaluate().unwrap();
         println!("Evaluated result: {}", evaluated_result);
@@ -189,7 +179,7 @@ mod tests {
     fn test_invalid_processor() {
         use crate::{ParserError, WorldInfoError};
         use crate::core::processors::WorldInfoRegistry;
-        use crate::{WorldInfo, WorldInfoEntry, EntryFactory, WorldInfoFactory};
+        use crate::{WorldInfo, EntryFactory, WorldInfoFactory};
         use std::sync::Arc;
 
         let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
@@ -197,11 +187,9 @@ mod tests {
         let input = r#"@[weaver.core.wildcard(invalid: true)]"#;
 
         let mut worldinfo = WorldInfo::new(Box::new(registry));
+        let entry = worldinfo.new_entry("test", 0);
 
-        let mut entry = WorldInfoEntry::create("test", 0, 0);
         entry.set_text(&input);
-
-        worldinfo.insert_entry(entry);
 
         let evaluated_result = worldinfo.evaluate().unwrap_err(); // Should fail
         let valid = matches!(

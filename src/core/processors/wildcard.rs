@@ -46,13 +46,12 @@ pub struct WildcardProcessorFactory;
 impl<P: PluginBridge + 'static> WorldInfoProcessorFactory<P> for WildcardProcessorFactory {
     fn create(&self, properties: &serde_json::Value, _bridge: &Arc<P>) -> Box<dyn WorldInfoProcessor> {
         println!("Creating wildcard");
-        let raw_items: Vec<crate::WorldInfoType> = properties["items"].as_array().unwrap().iter().map(|x| x.into()).collect();
+        let raw_items= properties["items"].as_array().unwrap();
         let mut items = Vec::new();
 
         for item in raw_items {
-            match item {
-                crate::WorldInfoType::String(s) => items.push(s),
-                _ => continue
+            if let serde_json::Value::String(s) = item {
+                items.push(s.to_string());
             }
         }
 
