@@ -175,7 +175,7 @@ impl EntryFactory for WorldInfoEntry {
         WorldInfoEntry::new(name.to_string(), id, order)
     }
     fn parse<P: PluginBridge>(&mut self, registry: &WorldInfoRegistry<P>) -> Result<&mut WorldInfoEntry, WorldInfoError> {
-        println!("Parsing node: {:?}", self.text);
+        log::debug!("Parsing node: {:?}", self.text);
         match parse_entry_content(&self.text, registry) {
             Ok(nodes) => self.nodes = nodes,
             Err(e) => return Err(WorldInfoError::ParserError(e)),

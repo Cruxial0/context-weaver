@@ -45,6 +45,7 @@ pub struct RngProcessorFactory;
 
 impl<P: PluginBridge + 'static> WorldInfoProcessorFactory<P> for RngProcessorFactory {
     fn create(&self, properties: &serde_json::Value, _bridge: &Arc<P>) -> Box<dyn WorldInfoProcessor> {
+        log::trace!("Creating rng processor");
         let raw_min = properties["min"].clone();
         let raw_max = properties["max"].clone();
         let raw_decimal = properties["decimals"].clone();

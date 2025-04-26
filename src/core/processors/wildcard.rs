@@ -45,7 +45,7 @@ pub struct WildcardProcessorFactory;
 
 impl<P: PluginBridge + 'static> WorldInfoProcessorFactory<P> for WildcardProcessorFactory {
     fn create(&self, properties: &serde_json::Value, _bridge: &Arc<P>) -> Box<dyn WorldInfoProcessor> {
-        println!("Creating wildcard");
+        log::trace!("Creating wildcard processor");
         let raw_items= properties["items"].as_array().unwrap();
         let mut items = Vec::new();
 

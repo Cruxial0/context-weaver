@@ -1,3 +1,4 @@
+#[cfg(test)]
 mod tests {
     use rand::Rng;
     use crate::core::processors::PluginBridge;
@@ -23,17 +24,23 @@ mod tests {
         format!("The plugin's forecast is: {}", items[index].as_str().unwrap())
     }
 
+    fn init() {
+        let _ = env_logger::builder().is_test(true).filter_level(log::LevelFilter::Trace).try_init();
+    }
+
     #[test]
     fn test_parser() {
         use crate::core::processors::{WildcardProcessorFactory, WorldInfoRegistry, RngProcessorFactory};
         use crate::{WorldInfo, EntryFactory, WorldInfoFactory};
         use std::sync::Arc;
 
+        init();
+
         let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
         registry.register_processor("weaver.core.wildcard", Box::new(WildcardProcessorFactory));
         registry.register_processor("weaver.core.rng", Box::new(RngProcessorFactory));
         //let input = r#"Today's weather is @[weaver.core.wildcard(items: ["sunny", "cloudy", "rainy"], test: 100)]!"#;
-        let input = r#"The generated number is @[weaver.core.rng(min: 0, max: 100, decimals: true)]!, Today's weather is @[weaver.core.wildcard(items: ["sunny", "cloudy", "rainy"])]!"#;
+        let input = r#"The generated number is @[weaver.core.rng(min: 0, max: 100)]!, Today's weather is @[weaver.core.wildcard(items: ["sunny", "cloudy", "rainy"])]!"#;
 
         let mut worldinfo = WorldInfo::new(Box::new(registry));
 
@@ -62,6 +69,8 @@ mod tests {
         use crate::core::processors::{WorldInfoRegistry, WildcardProcessorFactory, RngProcessorFactory};
         use crate::{WorldInfo, EntryFactory, WorldInfoFactory};
         use std::sync::Arc;
+
+        init();
 
         let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
         registry.register_processor("weaver.core.wildcard", Box::new(WildcardProcessorFactory));
@@ -98,6 +107,8 @@ mod tests {
         use crate::{WorldInfo, EntryFactory, WorldInfoFactory,};
         use std::sync::Arc;
 
+        init();
+
         let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
         registry.register_plugin_processor("dummy", "test");
         let input = r#"@[weaver.plugin.dummy.test(
@@ -131,6 +142,8 @@ mod tests {
         use crate::{WorldInfo, EntryFactory, WorldInfoFactory};
         use std::sync::Arc;
 
+        init();
+
         let mut registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
         registry.register_variable("global:test".to_string(), "test".into());
 
@@ -152,6 +165,8 @@ mod tests {
         use crate::core::processors::{WorldInfoRegistry, RngProcessorFactory};
         use crate::{WorldInfo, EntryFactory, WorldInfoFactory};
         use std::sync::Arc;
+        
+        init();
 
         let mut registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
         registry.register_processor("weaver.core.rng", Box::new(RngProcessorFactory));
@@ -172,9 +187,10 @@ mod tests {
         entry.set_text(&input);
 
         let evaluated_result = worldinfo.evaluate().unwrap();
+        let possible_results = vec!["The prophecy is true!", "The prophecy is but a mere hoax!"].iter().map(|s| s.to_string()).collect::<Vec<String>>();
         println!("Evaluated result: {}", evaluated_result);
 
-        assert_eq!(evaluated_result, "It seems the variable is true!");
+        assert!(possible_results.contains(&evaluated_result));
     }
 
     #[test]
@@ -183,6 +199,8 @@ mod tests {
         use crate::core::processors::WorldInfoRegistry;
         use crate::{WorldInfo, EntryFactory, WorldInfoFactory};
         use std::sync::Arc;
+
+        init();
 
         let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
 

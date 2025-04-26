@@ -1,6 +1,8 @@
-use crate::core::nodes::{TextNode, VariableNode};
 // src/parser.rs
-use crate::core::processors::{PluginBridge, WorldInfoRegistry}; // Assuming WorldInfoRegistry is the correct name
+
+// --- Crates ---
+use crate::core::nodes::{TextNode, VariableNode};
+use crate::core::processors::{PluginBridge, WorldInfoRegistry};
 use crate::errors::ParserError;
 use crate::WorldInfoNode; // Placeholder imports
 use pest::iterators::{Pair, Pairs};
@@ -9,17 +11,16 @@ use pest_derive::Parser;
 use pest::pratt_parser::{Op, PrattParser};
 use serde_json::{json, Map, Value};
 use std::fmt::Debug;
-use std::iter::Peekable; // Needed for peeking in the main loop
-
-// --- Bring in Pratt Parser ---
+use std::iter::Peekable;
 use lazy_static::lazy_static;
+// --- Add log crate ---
+use log::{debug, error, info, trace, warn}; // Import log macros
 
-
-// --- AST Definitions (Ensure these are defined as before) ---
+// --- AST Definitions (Unchanged) ---
 #[derive(Debug, Clone)]
 pub enum Expression {
-    Literal(Value), // Using serde_json::Value for evaluated literals
-    Variable { scope: String, name: String, raw_tag: String }, // Keep raw tag for errors
+    Literal(Value),
+    Variable { scope: String, name: String, raw_tag: String },
     Processor { name: String, properties: Vec<(String, AstNode)>, raw_tag: String },
     UnaryOperation { operator: UnaryOperator, operand: Box<Expression> },
     BinaryOperation { left: Box<Expression>, operator: BinaryOperator, right: Box<Expression> },
@@ -33,83 +34,44 @@ pub enum UnaryOperator {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOperator {
     // Logical
-    And, // &&
-    Or,  // ||
+    And, Or,
     // Comparison
-    Eq,  // ==
-    Neq, // !=
-    Lt,  // <
-    Gt,  // >
-    Lte, // <=
-    Gte, // >=
+    Eq, Neq, Lt, Gt, Lte, Gte,
     // Arithmetic
-    Add, // +
-    Sub, // -
-    Mul, // *
-    Div, // /
+    Add, Sub, Mul, Div,
 }
 
 #[derive(Debug, Clone)]
 pub enum AstNode {
     Text(String),
-    Processor {
-        name: String,
-        properties: Vec<(String, AstNode)>, // Properties remain Vec<(String, AstNode)> for now
-        raw_tag: String,
-    },
-    Trigger {
-        id: String,
-        raw_tag: String,
-    },
-    // Top-level variant for {{var}} directly in text content
-    Variable {
-        scope: String,
-        name: String,
-        raw_tag: String,
-    },
-    MacroIf {
-        condition: Box<Expression>,
-        then_branch: Vec<AstNode>,
-        else_branch: Option<Vec<AstNode>>,
-        raw_tag: String,
-    },
-    MacroForeach {
-        item_variable: String,
-        collection: Box<Expression>,
-        body: Vec<AstNode>,
-        raw_tag: String,
-    },
-    // Represents nested values within properties during parsing (used during property parsing)
+    Processor { name: String, properties: Vec<(String, AstNode)>, raw_tag: String },
+    Trigger { id: String, raw_tag: String },
+    Variable { scope: String, name: String, raw_tag: String },
+    MacroIf { condition: Box<Expression>, then_branch: Vec<AstNode>, else_branch: Option<Vec<AstNode>>, raw_tag: String },
+    MacroForeach { item_variable: String, collection: Box<Expression>, body: Vec<AstNode>, raw_tag: String },
     NestedValue(Value),
     NestedArray(Vec<AstNode>),
     NestedObject(Vec<(String, AstNode)>),
 }
 
-// --- Derive the Pest Parser ---
+// --- Derive the Pest Parser (Unchanged) ---
 #[derive(Parser)]
 #[grammar = "parser.pest"]
 struct WorldInfoParser;
 
-// --- Pratt Parser Definition ---
+// --- Pratt Parser Definition (Unchanged) ---
 lazy_static! {
     static ref PRATT_PARSER: PrattParser<Rule> = {
         use pest::pratt_parser::Assoc::*;
         use Rule::*;
 
-        // Define precedence from lowest to highest
         PrattParser::new()
-            // Level 1: Logical OR
-            .op(Op::infix(or_op, Left))         // ||
-            // Level 2: Logical AND
-            .op(Op::infix(and_op, Left))        // &&
-            // Level 3: Comparisons
-            .op(Op::infix(comp_op, Left))       // == != < > <= >=
-            // Level 4: Addition/Subtraction
-            .op(Op::infix(add_op, Left) | Op::infix(sub_op, Left)) // + -
-            // Level 5: Multiplication/Division
-            .op(Op::infix(mul_op, Left) | Op::infix(div_op, Left)) // * /
-            // Level 6: Unary Prefix
-            .op(Op::prefix(not_op))             // !
+            .op(Op::infix(or_op, Left))
+            .op(Op::infix(and_op, Left))
+            .op(Op::infix(comp_op, Left))
+            .op(Op::infix(add_op, Left) | Op::infix(sub_op, Left))
+            .op(Op::infix(mul_op, Left) | Op::infix(div_op, Left))
+            .op(Op::prefix(not_op))
     };
 }
 
@@ -117,86 +79,106 @@ lazy_static! {
 
 /// Parses pairs representing an expression using the Pratt parser.
 fn parse_expression_pratt(pairs: Pairs<Rule>) -> Result<Expression, ParserError> {
+    trace!("Entering parse_expression_pratt");
     PRATT_PARSER
-        .map_primary(|primary| match primary.as_rule() {
+        .map_primary(|primary| {
+            trace!("Pratt primary rule: {:?}", primary.as_rule());
+            match primary.as_rule() {
             // --- Handle structural rules by recursing ---
             Rule::expression | Rule::logical_or | Rule::logical_and | Rule::comparison |
             Rule::addition_subtraction | Rule::multiplication_division | Rule::unary_prefix | Rule::term => {
-                // Descend into wrapper rules to find the actual primary term
-                // println!("DEBUG: Descending into structural rule in map_primary: {:?}", primary.as_rule()); // Reduced noise
+                trace!("Pratt descending into structural rule: {:?}", primary.as_rule());
                 parse_expression_pratt(primary.into_inner())
             }
             // --- Actual Primary Terms ---
             Rule::literal => {
                 match parse_literal(primary.clone())? {
                     AstNode::NestedValue(v) => Ok(Expression::Literal(v)),
-                    _ => Err(ParserError::Processing(format!("Expected literal value from literal rule, got {:?}", primary.as_str())))
+                    other => {
+                        error!("Expected literal value from literal rule, got {:?}", other);
+                        Err(ParserError::Processing(format!("Expected literal value from literal rule, got non-NestedValue AST node")))
+                    }
                 }
             }
             Rule::variable => {
                 match parse_atomic_variable(primary.clone())? {
-                    // Assuming parse_atomic_variable returns AstNode::Variable
                     AstNode::Variable { scope, name, raw_tag } => Ok(Expression::Variable { scope, name, raw_tag }),
-                    _ => Err(ParserError::Processing(format!("Expected variable node from atomic parse, got {:?}", primary.as_str())))
+                     other => {
+                        error!("Expected variable node from atomic parse, got {:?}", other);
+                        Err(ParserError::Processing(format!("Expected variable node from atomic parse, got non-Variable AST node")))
+                    }
                 }
             }
             Rule::processor_tag => {
                 match parse_atomic_processor(primary.clone())? {
-                    // Assuming parse_atomic_processor returns AstNode::Processor
                     AstNode::Processor { name, properties, raw_tag } => Ok(Expression::Processor { name, properties, raw_tag }),
-                    _ => Err(ParserError::Processing(format!("Expected processor node from atomic parse, got {:?}", primary.as_str())))
+                     other => {
+                        error!("Expected processor node from atomic parse, got {:?}", other);
+                        Err(ParserError::Processing(format!("Expected processor node from atomic parse, got non-Processor AST node")))
+                    }
                 }
             }
-            // Allow direct matching of literal components if Pest optimizes that way
+            // Allow direct matching of literal components
             Rule::number | Rule::boolean | Rule::null | Rule::quoted_string => {
-                match parse_literal(primary.clone())? {
+                 match parse_literal(primary.clone())? {
                     AstNode::NestedValue(v) => Ok(Expression::Literal(v)),
-                    _ => Err(ParserError::Processing(format!("Expected literal value from specific literal rule, got {:?}", primary.as_str())))
+                    other => {
+                        error!("Expected literal value from specific literal rule, got {:?}", other);
+                        Err(ParserError::Processing(format!("Expected literal value from specific literal rule, got non-NestedValue AST node")))
+                    }
                 }
             }
             Rule::string => { // Handle silent string rule
                 let inner = primary.clone().into_inner().next().ok_or_else(|| ParserError::Processing("Empty string rule".to_string()))?;
-                match parse_literal(inner)? {
+                 match parse_literal(inner)? {
                     AstNode::NestedValue(v) => Ok(Expression::Literal(v)),
-                    _ => Err(ParserError::Processing(format!("Expected literal value from string rule, got {:?}", primary.as_str())))
+                    other => {
+                        error!("Expected literal value from string rule, got {:?}", other);
+                        Err(ParserError::Processing(format!("Expected literal value from string rule, got non-NestedValue AST node")))
+                    }
                 }
             }
-            rule => Err(ParserError::Processing(format!("Unexpected primary rule: {:?} ({})", rule, primary.as_str()))),
-        })
+            rule => {
+                 error!("Unexpected primary rule in Pratt parser: {:?} ({})", rule, primary.as_str());
+                 Err(ParserError::Processing(format!("Unexpected primary rule: {:?}", rule)))
+            }
+        }})
         .map_prefix(|op, rhs| {
+            trace!("Pratt prefix op: {:?}, rhs: {:?}", op.as_rule(), rhs);
             let rhs_expr = rhs?;
             match op.as_rule() {
                 Rule::not_op => Ok(Expression::UnaryOperation {
                     operator: UnaryOperator::Not,
                     operand: Box::new(rhs_expr),
                 }),
-                rule => Err(ParserError::Processing(format!("Unexpected prefix operator: {:?}", rule))),
+                rule => {
+                    error!("Unexpected prefix operator: {:?}", rule);
+                    Err(ParserError::Processing(format!("Unexpected prefix operator: {:?}", rule)))
+                }
             }
         })
         .map_infix(|lhs, op, rhs| {
+            trace!("Pratt infix op: {:?}, lhs: {:?}, rhs: {:?}", op.as_rule(), lhs, rhs);
             let lhs_expr = lhs?;
             let rhs_expr = rhs?;
             let operator = match op.as_rule() {
-                // Logical
                 Rule::or_op => BinaryOperator::Or,
                 Rule::and_op => BinaryOperator::And,
-                // Comparison
                 Rule::comp_op => match op.as_str() {
-                    "==" => BinaryOperator::Eq,
-                    "!=" => BinaryOperator::Neq,
-                    "<" => BinaryOperator::Lt,
-                    ">" => BinaryOperator::Gt,
-                    "<=" => BinaryOperator::Lte,
-                    ">=" => BinaryOperator::Gte,
-                    _ => return Err(ParserError::Processing(format!("Unknown comparison operator: {}", op.as_str()))),
+                    "==" => BinaryOperator::Eq, "!=" => BinaryOperator::Neq,
+                    "<" => BinaryOperator::Lt, ">" => BinaryOperator::Gt,
+                    "<=" => BinaryOperator::Lte, ">=" => BinaryOperator::Gte,
+                    _ => {
+                        error!("Unknown comparison operator: {}", op.as_str());
+                        return Err(ParserError::Processing(format!("Unknown comparison operator: {}", op.as_str())));
+                    }
                 },
-                // Arithmetic (NEW)
-                Rule::add_op => BinaryOperator::Add,
-                Rule::sub_op => BinaryOperator::Sub,
-                Rule::mul_op => BinaryOperator::Mul,
-                Rule::div_op => BinaryOperator::Div,
-                // ---
-                rule => return Err(ParserError::Processing(format!("Unexpected infix operator: {:?}", rule))),
+                Rule::add_op => BinaryOperator::Add, Rule::sub_op => BinaryOperator::Sub,
+                Rule::mul_op => BinaryOperator::Mul, Rule::div_op => BinaryOperator::Div,
+                rule => {
+                    error!("Unexpected infix operator: {:?}", rule);
+                    return Err(ParserError::Processing(format!("Unexpected infix operator: {:?}", rule)));
+                }
             };
             Ok(Expression::BinaryOperation {
                 left: Box::new(lhs_expr),
@@ -210,95 +192,110 @@ fn parse_expression_pratt(pairs: Pairs<Rule>) -> Result<Expression, ParserError>
 
 // --- Public Entry Point ---
 
-/// Parses the raw input string containing text and special tags (@[...], <trigger...>, {{...}}, {#...#})
-/// into a vector of resolved WorldInfoNode objects.
-///
-/// Handles nested tags recursively.
-///
-/// # Arguments
-/// * `raw` - The input string to parse.
-/// * `registry` - The processor registry used to instantiate processors.
-///
-/// # Returns
-/// A `Result` containing either the vector of resolved nodes or a `ParserError`.
+/// Parses the raw input string into resolved WorldInfoNode objects.
 pub fn parse_entry_content<P: PluginBridge + Debug>(
     raw: &str,
     registry: &WorldInfoRegistry<P>,
 ) -> Result<Vec<Box<dyn WorldInfoNode>>, ParserError> {
-    println!("Parsing input: {:?}", raw);
+    info!("Parsing input (first 50 chars): {:?}", raw.chars().take(50).collect::<String>());
+    trace!("Full raw input: {:?}", raw); // Use trace for potentially large input
     let pairs = WorldInfoParser::parse(Rule::input, raw)
-        .map_err(|e| ParserError::PestParse(e))?;
-    // println!("Initial pairs: {:?}", pairs); // Reduced noise
+        .map_err(|e| {
+            error!("Pest parsing failed: {}", e);
+            ParserError::PestParse(e)
+        })?;
+    trace!("Initial Pest pairs: {:?}", pairs); // Trace for potentially verbose output
 
-    let input_pair = pairs.peek().ok_or_else(|| ParserError::Processing("Empty parse result".to_string()))?;
+    let input_pair = pairs.peek().ok_or_else(|| {
+        error!("Empty parse result from Pest");
+        ParserError::Processing("Empty parse result".to_string())
+    })?;
     if input_pair.as_rule() != Rule::input {
+         error!("Expected Rule::input from Pest, found {:?}", input_pair.as_rule());
         return Err(ParserError::Processing(format!("Expected Rule::input, found {:?}", input_pair.as_rule())));
     }
 
     let mut inner_pairs = input_pair.clone().into_inner().peekable();
     let ast = build_ast_from_pairs::<P>(&mut inner_pairs)?;
-    println!("Built AST: {:?}", ast);
+    debug!("Built AST: {:?}", ast); // Debug level for AST structure
 
     let resolved = resolve_ast_nodes(&ast, registry)?;
-    println!("Resolved Nodes (may be partial): {:?}", resolved.iter().map(|n| n.name()).collect::<Vec<_>>());
+    debug!("Resolved Nodes (count: {}): {:?}", resolved.len(), resolved.iter().map(|n| n.name()).collect::<Vec<_>>());
     Ok(resolved)
 }
 
 // --- AST Building ---
 
 /// Builds the AST from a *peekable iterator* of pest pairs.
-/// Consumes pairs from the iterator as it builds nodes.
 fn build_ast_from_pairs<'i, P: PluginBridge + Debug>(
     pairs: &mut Peekable<Pairs<'i, Rule>>,
 ) -> Result<Vec<AstNode>, ParserError> {
+    trace!("Entering build_ast_from_pairs");
     let mut nodes = Vec::new();
 
     while let Some(pair) = pairs.peek() {
         let current_pair = pair.clone();
+        trace!("AST build loop - current rule: {:?}", current_pair.as_rule());
         match current_pair.as_rule() {
             Rule::text => {
                 let text_pair = pairs.next().unwrap();
+                trace!("AST build: Text node: {:?}", text_pair.as_str());
                 nodes.push(AstNode::Text(text_pair.as_str().to_string()));
             }
             Rule::processor_tag_content => {
                 let content_pair = pairs.next().unwrap();
+                trace!("AST build: Parsing processor content: {:?}", content_pair.as_str());
                 nodes.push(parse_processor_content::<P>(content_pair)?);
             }
             Rule::trigger_tag_content => {
                 let content_pair = pairs.next().unwrap();
+                trace!("AST build: Parsing trigger content: {:?}", content_pair.as_str());
                 nodes.push(parse_trigger_content::<P>(content_pair)?);
             }
             Rule::variable_tag_content => {
                 let content_pair = pairs.next().unwrap();
+                 trace!("AST build: Parsing variable content: {:?}", content_pair.as_str());
                 nodes.push(parse_variable_content::<P>(content_pair)?);
             }
             Rule::macro_tag => {
                 let macro_container_pair = pairs.next().unwrap();
+                 trace!("AST build: Parsing macro tag: {:?}", macro_container_pair.as_str());
                 let macro_pair = macro_container_pair.clone().into_inner().next()
-                    .ok_or_else(|| ParserError::Processing(format!("Empty 'macro_tag' pair: {:?}", macro_container_pair.as_str())))?;
+                    .ok_or_else(|| {
+                        error!("Empty 'macro_tag' pair: {:?}", macro_container_pair.as_str());
+                        ParserError::Processing(format!("Empty 'macro_tag' pair: {:?}", macro_container_pair.as_str()))
+                    })?;
                 match macro_pair.as_rule() {
                     Rule::macro_if => nodes.push(parse_macro_if::<P>(macro_pair)?),
                     Rule::macro_foreach => nodes.push(parse_macro_foreach::<P>(macro_pair)?),
-                    r => return Err(ParserError::InvalidRule(r)),
+                    r => {
+                        error!("Invalid rule inside macro_tag: {:?}", r);
+                        return Err(ParserError::InvalidRule(r));
+                    }
                 }
             }
             Rule::EOI => {
+                trace!("AST build: Reached EOI");
                 pairs.next();
                 break;
             }
             Rule::WHITESPACE => {
+                 trace!("AST build: Skipping WHITESPACE");
                 pairs.next();
             }
             r => {
                 let unexpected_pair = pairs.next().unwrap();
-                eprintln!("Unexpected rule during AST building: {:?} ({:?})", r, unexpected_pair.as_str());
+                // Use warn! here if it's potentially recoverable or just unexpected structure
+                // Use error! if it signifies a definite parsing failure
+                error!("Unexpected rule during AST building: {:?} ({:?})", r, unexpected_pair.as_str());
                 if matches!(r, Rule::processor_tag_content | Rule::trigger_tag_content | Rule::variable_tag_content) {
-                    eprintln!("Error: Content rule {:?} encountered unexpectedly in main loop.", r);
+                    error!("Critical Error: Content rule {:?} encountered unexpectedly in main loop.", r);
                 }
                 return Err(ParserError::InvalidRule(r));
             }
         }
     }
+    trace!("Exiting build_ast_from_pairs");
     Ok(nodes)
 }
 
@@ -306,31 +303,37 @@ fn build_ast_from_pairs<'i, P: PluginBridge + Debug>(
 fn parse_processor_content<'i, P: PluginBridge + Debug>(
     pair: Pair<'i, Rule>,
 ) -> Result<AstNode, ParserError> {
+    trace!("Parsing processor content: {:?}", pair.as_str());
     if pair.as_rule() != Rule::processor_tag_content {
+        error!("Expected processor_tag_content, got {:?}", pair.as_rule());
         return Err(ParserError::Processing(format!("Expected processor_tag_content, got {:?}", pair.as_rule())));
     }
-    let raw_tag_string = pair.as_str().to_string(); // Capture the full tag
-    let mut inner = pair.clone().into_inner(); // processor_start, processor_name, [properties], processor_end
+    let raw_tag_string = pair.as_str().to_string();
+    let mut inner = pair.clone().into_inner();
 
     let _start_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected processor_start in content".to_string()))?;
     let name_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected processor_name in content".to_string()))?;
-    if name_pair.as_rule() != Rule::processor_name { return Err(ParserError::Processing(format!("Expected processor_name, got {:?}", name_pair.as_rule()))); }
+    if name_pair.as_rule() != Rule::processor_name {
+        error!("Expected processor_name, got {:?}", name_pair.as_rule());
+        return Err(ParserError::Processing(format!("Expected processor_name, got {:?}", name_pair.as_rule())));
+    }
     let name = name_pair.as_str().to_string();
+    trace!("Processor name: {}", name);
 
-    // Check for optional properties rule
     let properties = if let Some(props_pair) = inner.peek() {
-        // Check if the next rule is 'properties'
         if props_pair.as_rule() == Rule::properties {
-            let consumed_props_pair = inner.next().unwrap(); // Consume properties
+            let consumed_props_pair = inner.next().unwrap();
+            trace!("Parsing processor properties: {:?}", consumed_props_pair.as_str());
             parse_properties(consumed_props_pair)?
         } else {
-            // No properties rule found (might be just processor_end next)
+            trace!("No properties rule found for processor {}", name);
             Vec::new()
         }
     } else {
-        // No more inner pairs after name, means no properties
+         trace!("No inner pairs after name for processor {}", name);
         Vec::new()
     };
+    trace!("Processor properties parsed (count: {})", properties.len());
 
     let _end_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected processor_end in content".to_string()))?;
 
@@ -342,28 +345,29 @@ fn parse_processor_content<'i, P: PluginBridge + Debug>(
 fn parse_trigger_content<'i, P: PluginBridge + Debug>(
     pair: Pair<'i, Rule>,
 ) -> Result<AstNode, ParserError> {
+    trace!("Parsing trigger content: {:?}", pair.as_str());
     if pair.as_rule() != Rule::trigger_tag_content {
+        error!("Expected trigger_tag_content, got {:?}", pair.as_rule());
         return Err(ParserError::Processing(format!("Expected trigger_tag_content, got {:?}", pair.as_rule())));
     }
-    let raw_tag_string = pair.as_str().to_string(); // Capture the full tag
-    let mut inner = pair.clone().into_inner(); // trigger_start, [trigger_attributes], trigger_end
+    let raw_tag_string = pair.as_str().to_string();
+    let mut inner = pair.clone().into_inner();
 
     let _start_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected trigger_start in content".to_string()))?;
 
     let mut trigger_id: Option<String> = None;
 
-    // Check for optional attributes
     if let Some(attrs_pair) = inner.peek() {
         if attrs_pair.as_rule() == Rule::trigger_attributes {
-            let consumed_attrs = inner.next().unwrap(); // Consume attributes
+            let consumed_attrs = inner.next().unwrap();
+            trace!("Parsing trigger attributes: {:?}", consumed_attrs.as_str());
             for attr_pair in consumed_attrs.clone().into_inner() {
                 if attr_pair.as_rule() == Rule::trigger_attribute {
-                    let mut attr_inner = attr_pair.clone().into_inner(); // trigger_key, trigger_value
+                    let mut attr_inner = attr_pair.clone().into_inner();
                     let key_pair = attr_inner.next().ok_or_else(|| ParserError::Processing("Trigger attribute missing key".to_string()))?;
                     let value_pair = attr_inner.next().ok_or_else(|| ParserError::Processing("Trigger attribute missing value".to_string()))?;
 
                     if key_pair.as_str() == "id" {
-                        // trigger_value is silent `_`, so we get the inner quoted_string
                         let quoted_string_pair = value_pair.into_inner().next()
                             .ok_or_else(|| ParserError::Processing("Trigger id value missing quoted_string".to_string()))?;
                         if quoted_string_pair.as_rule() == Rule::quoted_string {
@@ -371,10 +375,13 @@ fn parse_trigger_content<'i, P: PluginBridge + Debug>(
                                 .find(|p| p.as_rule() == Rule::string_content)
                                 .map(|p| p.as_str()).unwrap_or("");
                             trigger_id = Some(unescape_string(content)?);
-                        } 
-                        else {
+                            trace!("Found trigger id: {:?}", trigger_id);
+                        } else {
+                             error!("Invalid trigger id value type: expected quoted_string, got {:?}", quoted_string_pair.as_rule());
                             return Err(ParserError::Processing(format!("Invalid trigger id value type: expected quoted_string, got {:?}", quoted_string_pair.as_rule())));
                         }
+                    } else {
+                         warn!("Ignoring unknown trigger attribute: {}", key_pair.as_str());
                     }
                 }
             }
@@ -383,7 +390,10 @@ fn parse_trigger_content<'i, P: PluginBridge + Debug>(
 
     let _end_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected trigger_end in content".to_string()))?;
 
-    let id = trigger_id.ok_or_else(|| ParserError::MissingTriggerId(raw_tag_string.clone()))?;
+    let id = trigger_id.ok_or_else(|| {
+        error!("Trigger tag missing 'id' attribute: {}", raw_tag_string);
+        ParserError::MissingTriggerId(raw_tag_string.clone())
+    })?;
 
     Ok(AstNode::Trigger { id, raw_tag: raw_tag_string })
 }
@@ -392,26 +402,35 @@ fn parse_trigger_content<'i, P: PluginBridge + Debug>(
 fn parse_variable_content<'i, P: PluginBridge + Debug>(
     pair: Pair<'i, Rule>,
 ) -> Result<AstNode, ParserError> {
+    trace!("Parsing variable content: {:?}", pair.as_str());
     if pair.as_rule() != Rule::variable_tag_content {
+         error!("Expected variable_tag_content, got {:?}", pair.as_rule());
         return Err(ParserError::Processing(format!("Expected variable_tag_content, got {:?}", pair.as_rule())));
     }
-    let raw_tag = pair.as_str().to_string(); // Capture the full tag
-    let mut inner = pair.clone().into_inner(); // variable_start, scope, variable_separator, name, variable_end
+    let raw_tag = pair.as_str().to_string();
+    let mut inner = pair.clone().into_inner();
 
     let _start_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected variable_start in content".to_string()))?;
 
     let scope_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected scope in variable content".to_string()))?;
-    if scope_pair.as_rule() != Rule::scope { return Err(ParserError::Processing(format!("Expected scope, got {:?}", scope_pair.as_rule()))); }
+    if scope_pair.as_rule() != Rule::scope {
+        error!("Expected scope, got {:?}", scope_pair.as_rule());
+        return Err(ParserError::Processing(format!("Expected scope, got {:?}", scope_pair.as_rule())));
+    }
 
     let _sep_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected separator in variable content".to_string()))?;
 
     let name_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected name in variable content".to_string()))?;
-    if name_pair.as_rule() != Rule::name { return Err(ParserError::Processing(format!("Expected name, got {:?}", name_pair.as_rule()))); }
+    if name_pair.as_rule() != Rule::name {
+        error!("Expected name, got {:?}", name_pair.as_rule());
+        return Err(ParserError::Processing(format!("Expected name, got {:?}", name_pair.as_rule())));
+    }
 
     let _end_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected variable_end in content".to_string()))?;
 
     let scope = scope_pair.as_str().to_string();
     let name = name_pair.as_str().to_string();
+    trace!("Parsed variable: scope='{}', name='{}'", scope, name);
 
     Ok(AstNode::Variable { scope, name, raw_tag })
 }
@@ -419,238 +438,298 @@ fn parse_variable_content<'i, P: PluginBridge + Debug>(
 
 // --- Macro, Property, Literal Parsing Functions ---
 
-/// Helper function to trim leading/trailing whitespace from the first/last Text nodes in a sequence.
+/// Helper function to trim leading/trailing whitespace from the first/last Text nodes.
 fn trim_outer_text_nodes(nodes: &mut Vec<AstNode>) {
-    // Trim leading whitespace from the first text node
     if let Some(AstNode::Text(content)) = nodes.first_mut() {
-        *content = content.trim_start().to_string();
+        let trimmed = content.trim_start();
+        if trimmed.len() < content.len() {
+            trace!("Trimmed start whitespace from text node");
+            *content = trimmed.to_string();
+        }
     }
-    // Trim trailing whitespace from the last text node
     if let Some(AstNode::Text(content)) = nodes.last_mut() {
-        *content = content.trim_end().to_string();
+         let trimmed = content.trim_end();
+        if trimmed.len() < content.len() {
+            trace!("Trimmed end whitespace from text node");
+            *content = trimmed.to_string();
+        }
     }
 }
 
-/// Parses a pest pair representing a macro if tag into an AstNode::MacroIf.
+/// Parses a macro if tag.
 fn parse_macro_if<P: PluginBridge + Debug>(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
+    trace!("Parsing macro if: {:?}", pair.as_str());
     if pair.as_rule() != Rule::macro_if {
+        error!("Expected macro_if rule, got {:?}", pair.as_rule());
         return Err(ParserError::Processing(format!("Expected macro_if rule, got {:?}", pair.as_rule())));
     }
-    let mut inner = pair.clone().into_inner(); // macro_if_start, expression, macro_tag_end, inner_nodes (then), optional macro_else, macro_endif
+    let mut inner = pair.clone().into_inner();
 
     let start_tag_pair = inner.next().ok_or_else(|| ParserError::Processing("If macro missing start tag".to_string()))?;
     let start_tag_str = start_tag_pair.as_str();
 
     let condition_pair = inner.next().ok_or_else(|| ParserError::Processing(format!("If macro missing condition: {}", start_tag_str)))?;
-    let condition_str = condition_pair.as_str(); // Keep raw string for tag reconstruction
-    let condition = parse_expression_pratt(condition_pair.into_inner())?; // Parse the inner pairs of the expression rule
+    let condition_str = condition_pair.as_str();
+    trace!("Parsing if condition expression: {}", condition_str);
+    let condition = parse_expression_pratt(condition_pair.into_inner())?;
 
     let tag_end_pair = inner.next().ok_or_else(|| ParserError::Processing(format!("If macro missing end '#}}': {}", start_tag_str)))?;
     let tag_end_str = tag_end_pair.as_str();
     let full_raw_start_tag = format!("{}{}{}", start_tag_str, condition_str, tag_end_str);
+    trace!("Parsed if start tag: {}", full_raw_start_tag);
 
 
     // Parse the 'then' branch nodes
     let then_nodes_pair = inner.next().ok_or_else(|| ParserError::Processing(format!("If macro missing 'then' branch content: {}", full_raw_start_tag)))?;
-    if then_nodes_pair.as_rule() != Rule::inner_nodes { return Err(ParserError::Processing(format!("Expected inner_nodes for 'then' branch, found {:?} in {}", then_nodes_pair.as_rule(), full_raw_start_tag))); }
+    if then_nodes_pair.as_rule() != Rule::inner_nodes {
+        error!("Expected inner_nodes for 'then' branch, found {:?} in {}", then_nodes_pair.as_rule(), full_raw_start_tag);
+        return Err(ParserError::Processing(format!("Expected inner_nodes for 'then' branch, found {:?} in {}", then_nodes_pair.as_rule(), full_raw_start_tag)));
+    }
+    trace!("Parsing 'then' branch for: {}", full_raw_start_tag);
     let mut then_inner_pairs = then_nodes_pair.clone().into_inner().peekable();
     let mut then_branch = build_ast_from_pairs::<P>(&mut then_inner_pairs)?;
-    // Trim whitespace around the branch content
     trim_outer_text_nodes(&mut then_branch);
+    debug!("Parsed 'then' branch AST ({} nodes) for: {}", then_branch.len(), full_raw_start_tag);
 
 
     // Check for optional 'else' branch
     let mut else_branch: Option<Vec<AstNode>> = None;
     if let Some(peek_pair) = inner.peek() {
         if peek_pair.as_rule() == Rule::macro_else {
-            let else_pair = inner.next().unwrap(); // Consume macro_else
-            let mut else_inner = else_pair.clone().into_inner(); // macro_else_tag, inner_nodes (else)
+            let else_pair = inner.next().unwrap();
+            trace!("Parsing 'else' branch for: {}", full_raw_start_tag);
+            let mut else_inner = else_pair.clone().into_inner();
             let _else_tag = else_inner.next().ok_or_else(|| ParserError::Processing("Else macro missing tag".to_string()))?;
             let else_nodes_pair = else_inner.next().ok_or_else(|| ParserError::Processing("Else macro missing content".to_string()))?;
-            if else_nodes_pair.as_rule() != Rule::inner_nodes { return Err(ParserError::Processing(format!("Expected inner_nodes for 'else' branch, found {:?} in {}", else_nodes_pair.as_rule(), full_raw_start_tag))); }
+            if else_nodes_pair.as_rule() != Rule::inner_nodes {
+                 error!("Expected inner_nodes for 'else' branch, found {:?} in {}", else_nodes_pair.as_rule(), full_raw_start_tag);
+                 return Err(ParserError::Processing(format!("Expected inner_nodes for 'else' branch, found {:?} in {}", else_nodes_pair.as_rule(), full_raw_start_tag)));
+             }
             let mut else_inner_pairs = else_nodes_pair.clone().into_inner().peekable();
             let mut parsed_else_branch = build_ast_from_pairs::<P>(&mut else_inner_pairs)?;
-            // Trim whitespace around the branch content
             trim_outer_text_nodes(&mut parsed_else_branch);
+            debug!("Parsed 'else' branch AST ({} nodes) for: {}", parsed_else_branch.len(), full_raw_start_tag);
             else_branch = Some(parsed_else_branch);
+        } else {
+             trace!("No 'else' branch found for: {}", full_raw_start_tag);
         }
     }
 
     // Ensure endif is present
     let endif_pair = inner.next().ok_or_else(|| ParserError::Processing(format!("If macro missing endif tag: {}", full_raw_start_tag)))?;
-    if endif_pair.as_rule() != Rule::macro_endif { return Err(ParserError::Processing(format!("Expected endif tag, found {:?} in {}", endif_pair.as_rule(), full_raw_start_tag))); }
+    if endif_pair.as_rule() != Rule::macro_endif {
+        error!("Expected endif tag, found {:?} in {}", endif_pair.as_rule(), full_raw_start_tag);
+        return Err(ParserError::Processing(format!("Expected endif tag, found {:?} in {}", endif_pair.as_rule(), full_raw_start_tag)));
+    }
+    trace!("Found endif tag for: {}", full_raw_start_tag);
 
     Ok(AstNode::MacroIf {
-        condition: Box::new(condition), // Store the Expression enum
+        condition: Box::new(condition),
         then_branch,
         else_branch,
         raw_tag: full_raw_start_tag,
     })
 }
 
-/// Parses a pest pair representing a macro foreach tag into an AstNode::MacroForeach.
+/// Parses a macro foreach tag.
 fn parse_macro_foreach<P: PluginBridge + Debug>(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
+    trace!("Parsing macro foreach: {:?}", pair.as_str());
     if pair.as_rule() != Rule::macro_foreach {
+        error!("Expected macro_foreach rule, got {:?}", pair.as_rule());
         return Err(ParserError::Processing(format!("Expected macro_foreach rule, got {:?}", pair.as_rule())));
     }
-    let mut inner = pair.clone().into_inner(); // macro_foreach_start, identifier (item_var), expression (collection), macro_tag_end, inner_nodes, macro_endforeach
+    let mut inner = pair.clone().into_inner();
 
     let start_tag_pair = inner.next().ok_or_else(|| ParserError::Processing("Foreach macro missing start tag".to_string()))?;
     let start_tag_str = start_tag_pair.as_str();
 
     let item_var_pair = inner.next().ok_or_else(|| ParserError::Processing(format!("Foreach macro missing item variable: {}", start_tag_str)))?;
-        if item_var_pair.as_rule() != Rule::identifier {
-            return Err(ParserError::Processing(format!("Expected identifier for item variable in foreach, found {:?}: {}", item_var_pair.as_rule(), start_tag_str)));
+    if item_var_pair.as_rule() != Rule::identifier {
+        error!("Expected identifier for item variable in foreach, found {:?}: {}", item_var_pair.as_rule(), start_tag_str);
+        return Err(ParserError::Processing(format!("Expected identifier for item variable in foreach, found {:?}: {}", item_var_pair.as_rule(), start_tag_str)));
     }
     let item_variable = item_var_pair.as_str().trim().to_string();
     let item_var_str_full = item_var_pair.as_str();
+    trace!("Foreach item variable: {}", item_variable);
 
     let collection_pair = inner.next().ok_or_else(|| ParserError::Processing(format!("Foreach macro missing collection after 'in': {}", start_tag_str)))?;
     let collection_str_full = collection_pair.as_str();
-    let collection = parse_expression_pratt(collection_pair.into_inner())?; // Parse inner pairs of expression
+    trace!("Parsing foreach collection expression: {}", collection_str_full);
+    let collection = parse_expression_pratt(collection_pair.into_inner())?;
 
     let tag_end_pair = inner.next().ok_or_else(|| ParserError::Processing(format!("Foreach macro missing end '#}}': {}", start_tag_str)))?;
     let tag_end_str = tag_end_pair.as_str();
     let full_raw_start_tag = format!("{}{}{}{}", start_tag_str, item_var_str_full, collection_str_full, tag_end_str);
+    trace!("Parsed foreach start tag: {}", full_raw_start_tag);
 
     let body_nodes_pair = inner.next().ok_or_else(|| ParserError::Processing(format!("Foreach macro missing body content: {}", full_raw_start_tag)))?;
-    if body_nodes_pair.as_rule() != Rule::inner_nodes { return Err(ParserError::Processing(format!("Expected inner_nodes for 'foreach' body, found {:?} in {}", body_nodes_pair.as_rule(), full_raw_start_tag))); }
+    if body_nodes_pair.as_rule() != Rule::inner_nodes {
+        error!("Expected inner_nodes for 'foreach' body, found {:?} in {}", body_nodes_pair.as_rule(), full_raw_start_tag);
+        return Err(ParserError::Processing(format!("Expected inner_nodes for 'foreach' body, found {:?} in {}", body_nodes_pair.as_rule(), full_raw_start_tag)));
+    }
+    trace!("Parsing 'foreach' body for: {}", full_raw_start_tag);
     let mut body_inner_pairs = body_nodes_pair.clone().into_inner().peekable();
     let mut body = build_ast_from_pairs::<P>(&mut body_inner_pairs)?;
-    // Trim whitespace around the body content
     trim_outer_text_nodes(&mut body);
+    debug!("Parsed 'foreach' body AST ({} nodes) for: {}", body.len(), full_raw_start_tag);
+
 
     let endforeach_pair = inner.next().ok_or_else(|| ParserError::Processing(format!("Foreach macro missing endforeach tag: {}", full_raw_start_tag)))?;
-    if endforeach_pair.as_rule() != Rule::macro_endforeach { return Err(ParserError::Processing(format!("Expected endforeach tag, found {:?} in {}", endforeach_pair.as_rule(), full_raw_start_tag))); }
+    if endforeach_pair.as_rule() != Rule::macro_endforeach {
+        error!("Expected endforeach tag, found {:?} in {}", endforeach_pair.as_rule(), full_raw_start_tag);
+        return Err(ParserError::Processing(format!("Expected endforeach tag, found {:?} in {}", endforeach_pair.as_rule(), full_raw_start_tag)));
+    }
+     trace!("Found endforeach tag for: {}", full_raw_start_tag);
 
     Ok(AstNode::MacroForeach {
         item_variable,
-        collection: Box::new(collection), // Store the Expression enum
+        collection: Box::new(collection),
         body,
         raw_tag: full_raw_start_tag,
     })
 }
 
-/// Parses an *atomic* variable pair (e.g., from within an expression or property value).
+/// Parses an *atomic* variable pair.
 fn parse_atomic_variable(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
+    trace!("Parsing atomic variable: {:?}", pair.as_str());
     if pair.as_rule() != Rule::variable {
+        error!("Expected atomic variable rule, got {:?}", pair.as_rule());
         return Err(ParserError::Processing(format!("Expected atomic variable rule, got {:?}", pair.as_rule())));
     }
     let raw_tag = pair.as_str().to_string();
-    // Since it's atomic, we extract info based on structure defined in grammar
-    // {{ scope : name }}
     let content = raw_tag.trim_start_matches("{{").trim_end_matches("}}");
     let parts: Vec<&str> = content.splitn(2, ':').collect();
     if parts.len() == 2 {
         let scope = parts[0].trim().to_string();
         let name = parts[1].trim().to_string();
-        // Basic validation (ensure not empty)
         if scope.is_empty() || name.is_empty() {
+            error!("Invalid atomic variable format (empty scope/name): {}", raw_tag);
             Err(ParserError::Processing(format!("Invalid atomic variable format (empty scope/name): {}", raw_tag)))
         } else {
+            trace!("Parsed atomic variable: scope='{}', name='{}'", scope, name);
             Ok(AstNode::Variable { scope, name, raw_tag })
         }
     } else {
+        error!("Invalid atomic variable format (missing ':'): {}", raw_tag);
         Err(ParserError::Processing(format!("Invalid atomic variable format (missing ':'): {}", raw_tag)))
     }
 }
 
-/// Parses an *atomic* processor tag pair (e.g., from within a property value).
+/// Parses an *atomic* processor tag pair.
 fn parse_atomic_processor(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
+    trace!("Parsing atomic processor: {:?}", pair.as_str());
     if pair.as_rule() != Rule::processor_tag {
+        error!("Expected atomic processor_tag rule, got {:?}", pair.as_rule());
         return Err(ParserError::Processing(format!("Expected atomic processor_tag rule, got {:?}", pair.as_rule())));
     }
     let raw_tag = pair.as_str().to_string();
-    // Similar to atomic variable, parse based on expected string structure: @[name(...)] or @[name]
     let content = raw_tag.trim_start_matches("@[")
                             .trim_end_matches(']');
 
     let (name_str, props_str_opt) = match content.find('(') {
         Some(paren_idx) => {
-            // Ensure the string actually ends with ')' before slicing
             if content.ends_with(')') {
                 (&content[..paren_idx], Some(&content[paren_idx+1..content.len()-1]))
             } else {
+                error!("Malformed atomic processor tag (missing ')'): {}", raw_tag);
                 return Err(ParserError::Processing(format!("Malformed atomic processor tag (missing ')'): {}", raw_tag)));
             }
         },
-        None => (content, None), // No parentheses found
+        None => (content, None),
     };
 
     let name = name_str.trim().to_string();
     if name.is_empty() {
+        error!("Malformed atomic processor tag (empty name): {}", raw_tag);
         return Err(ParserError::Processing(format!("Malformed atomic processor tag (empty name): {}", raw_tag)));
     }
+    trace!("Atomic processor name: {}", name);
 
     let properties = match props_str_opt {
         Some(props_str) if !props_str.trim().is_empty() => {
-            // Re-parse the properties string using the properties rule
+            trace!("Re-parsing atomic processor properties: {}", props_str);
             let prop_pairs = WorldInfoParser::parse(Rule::properties, props_str)
-                .map_err(|e| ParserError::PestParse(e.with_path(&format!("atomic processor properties: {}", props_str))))?;
-            // parse yields an iterator, get the first (and likely only) pair
+                .map_err(|e| {
+                    error!("Pest parse failed for atomic processor properties '{}': {}", props_str, e);
+                    ParserError::PestParse(e.with_path(&format!("atomic processor properties: {}", props_str)))
+                 })?;
             if let Some(props_pair) = prop_pairs.peek() {
-                // Ensure the parsed rule is actually 'properties'
                 if props_pair.as_rule() == Rule::properties {
-                parse_properties(props_pair)?
+                    parse_properties(props_pair)?
                 } else {
-                    // This indicates an internal error or grammar issue if parse succeeded but didn't yield 'properties'
+                    error!("Expected properties rule from inner parse of atomic props, got {:?}", props_pair.as_rule());
                     return Err(ParserError::Internal(format!("Expected properties rule from inner parse, got {:?}", props_pair.as_rule())));
                 }
             } else {
-                // If parsing props_str yielded no pairs, treat as empty
+                trace!("Inner parse of atomic props yielded no pairs.");
                 Vec::new()
             }
         }
-        _ => Vec::new(), // No properties string or empty properties string
+        _ => {
+            trace!("No properties string for atomic processor {}", name);
+            Vec::new()
+        },
     };
-
+    trace!("Atomic processor properties parsed (count: {})", properties.len());
 
     Ok(AstNode::Processor { name, properties, raw_tag })
 }
 
 
 /// Parses a pest pair representing a literal value into an AstNode::NestedValue.
-/// Expects the actual literal rule pair (string, number, boolean, null, or quoted_string).
 fn parse_literal(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
+    trace!("Parsing literal rule {:?}: {:?}", pair.as_rule(), pair.as_str());
     match pair.as_rule() {
-        // Handle quoted_string which might be passed directly if string rule was silent
         Rule::quoted_string => {
-            // quoted_string contains optional string_content
             let inner_content = pair.clone().into_inner()
                 .find(|p| p.as_rule() == Rule::string_content)
                 .map(|p| p.as_str())
-                .unwrap_or(""); // Default to empty string if no content (e.g., "")
+                .unwrap_or("");
             let unescaped = unescape_string(inner_content)?;
+            trace!("Parsed quoted string literal: \"{}\"", unescaped);
             Ok(AstNode::NestedValue(Value::String(unescaped)))
         }
-        // Handle the silent string rule if it's passed
         Rule::string => {
             let quoted_string_pair = pair.clone().into_inner().next()
                 .ok_or_else(|| ParserError::Processing(format!("Empty string literal pair: {:?}", pair.as_str())))?;
-            // Recurse with the inner quoted_string pair
-            parse_literal(quoted_string_pair)
+            trace!("Descending into quoted_string from string rule");
+            parse_literal(quoted_string_pair) // Recurse
         }
         Rule::number => {
-            // Attempt to parse the number string directly into a serde_json::Number
             let num_str = pair.as_str();
-            let num = num_str.parse::<serde_json::Number>().map_err(|e| ParserError::Processing(format!("Failed to parse number '{}': {}", num_str, e)))?;
+            let num = num_str.parse::<serde_json::Number>().map_err(|e| {
+                error!("Failed to parse number '{}': {}", num_str, e);
+                ParserError::Processing(format!("Failed to parse number '{}': {}", num_str, e))
+            })?;
+            trace!("Parsed number literal: {}", num);
             Ok(AstNode::NestedValue(Value::Number(num)))
         }
-        Rule::boolean => Ok(AstNode::NestedValue(json!(pair.as_str() == "true"))),
-        Rule::null => Ok(AstNode::NestedValue(Value::Null)),
-        // Handle the wrapping literal rule if needed
+        Rule::boolean => {
+            let val = pair.as_str() == "true";
+            trace!("Parsed boolean literal: {}", val);
+            Ok(AstNode::NestedValue(json!(val)))
+        }
+        Rule::null => {
+            trace!("Parsed null literal");
+            Ok(AstNode::NestedValue(Value::Null))
+        }
         Rule::literal => {
             let inner_pair = pair.into_inner().next().ok_or_else(|| ParserError::Processing("Empty literal rule".to_string()))?;
-            parse_literal(inner_pair)
+             trace!("Descending into actual literal from literal rule");
+            parse_literal(inner_pair) // Recurse
         }
-        r => Err(ParserError::Processing(format!("Unexpected rule type for literal: {:?} ({:?})", r, pair.as_str()))),
+        r => {
+            error!("Unexpected rule type for literal: {:?} ({:?})", r, pair.as_str());
+            Err(ParserError::Processing(format!("Unexpected rule type for literal: {:?} ({:?})", r, pair.as_str())))
+        }
     }
 }
 
-/// Helper function to unescape string content based on the `escape` rule.
+/// Helper function to unescape string content.
 fn unescape_string(s: &str) -> Result<String, ParserError> {
+    // No logging added here as it could be very verbose if called frequently
     let mut unescaped = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable(); // Use peekable for unicode escape
+    let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '\\' {
             match chars.next() {
@@ -661,22 +740,34 @@ fn unescape_string(s: &str) -> Result<String, ParserError> {
                 Some('u') => {
                     let mut hex_code = String::with_capacity(4);
                     for _ in 0..4 {
-                        // Ensure the next char exists before pushing
-                        hex_code.push(chars.next().ok_or_else(|| ParserError::Processing("Incomplete unicode escape sequence: missing hex digits".to_string()))?);
+                         hex_code.push(chars.next().ok_or_else(|| {
+                             error!("Incomplete unicode escape sequence in string: {}", s);
+                             ParserError::Processing("Incomplete unicode escape sequence: missing hex digits".to_string())
+                         })?);
                     }
-                    // Validate hex digits
                     if hex_code.len() != 4 || !hex_code.chars().all(|c| c.is_ascii_hexdigit()) {
+                        error!("Invalid unicode escape sequence (non-hex) in string: \\u{}", hex_code);
                         return Err(ParserError::Processing(format!("Invalid unicode escape sequence: non-hex characters in \\u{}", hex_code)));
                     }
-                    let code_point = u32::from_str_radix(&hex_code, 16).map_err(|_| ParserError::Processing(format!("Invalid unicode escape sequence: failed to parse hex \\u{}", hex_code)))?;
-                    unescaped.push(std::char::from_u32(code_point).ok_or_else(|| ParserError::Processing(format!("Invalid unicode code point: {}", code_point)))?);
+                    let code_point = u32::from_str_radix(&hex_code, 16).map_err(|_| {
+                        error!("Invalid unicode escape sequence (parse hex failed) in string: \\u{}", hex_code);
+                        ParserError::Processing(format!("Invalid unicode escape sequence: failed to parse hex \\u{}", hex_code))
+                    })?;
+                    unescaped.push(std::char::from_u32(code_point).ok_or_else(|| {
+                         error!("Invalid unicode code point from escape: {}", code_point);
+                         ParserError::Processing(format!("Invalid unicode code point: {}", code_point))
+                    })?);
                 }
                 Some(other) => {
-                    // If it's not a recognized escape, just treat it as literal backslash + char
+                    // Treat unrecognized escapes as literal backslash + char
+                    warn!("Unrecognized escape sequence '\\{}' in string, treating literally", other);
                     unescaped.push('\\');
                     unescaped.push(other);
                 }
-                None => { return Err(ParserError::Processing("Dangling escape character at end of string".to_string())); }
+                None => {
+                    error!("Dangling escape character at end of string: {}", s);
+                    return Err(ParserError::Processing("Dangling escape character at end of string".to_string()));
+                }
             }
         } else {
             unescaped.push(c);
@@ -686,97 +777,96 @@ fn unescape_string(s: &str) -> Result<String, ParserError> {
 }
 
 
-/// Parses a pest pair representing pseudo-JSON properties into a vector of key-value AstNode pairs.
-/// Expects a `properties` rule pair.
+/// Parses pseudo-JSON properties into key-value AstNode pairs.
 fn parse_properties(pair: Pair<Rule>) -> Result<Vec<(String, AstNode)>, ParserError> {
+    trace!("Parsing properties rule: {:?}", pair.as_str());
     if pair.as_rule() != Rule::properties {
+        error!("Expected properties rule, got {:?}", pair.as_rule());
         return Err(ParserError::Processing(format!("Expected properties rule, got {:?}", pair.as_rule())));
     }
     let mut props = Vec::new();
-    // `properties` contains a sequence of `property` pairs
     for prop_pair in pair.clone().into_inner() {
-        // Only process actual `property` rules
         if prop_pair.as_rule() == Rule::property {
-            let mut inner = prop_pair.clone().into_inner(); // property_key, property_value
+            trace!("Parsing property pair: {:?}", prop_pair.as_str());
+            let mut inner = prop_pair.clone().into_inner();
 
-            // First inner element MUST be the property_key
             let key_pair_outer = inner.next().ok_or_else(|| ParserError::Processing(format!("Missing property_key pair in property rule: {:?}", prop_pair.as_str())))?;
 
-            // Check the rule is indeed property_key
             if key_pair_outer.as_rule() != Rule::property_key {
+                 error!("Expected property_key rule, got {:?} in {}", key_pair_outer.as_rule(), prop_pair.as_str());
                 return Err(ParserError::Processing(format!("Expected property_key rule, got {:?} in {}", key_pair_outer.as_rule(), prop_pair.as_str())));
             }
 
-            // Handle atomic property_key
             let key_str = key_pair_outer.as_str();
             let key = if key_str.starts_with('"') && key_str.ends_with('"') && key_str.len() >= 2 {
-                // It matched quoted_string: remove quotes and unescape content
                 let inner_content = &key_str[1..key_str.len()-1];
                 unescape_string(inner_content)?
             } else {
-                // It matched identifier: use the string directly
                 key_str.to_string()
             };
+            trace!("Parsed property key: \"{}\"", key);
 
-            // The next inner element MUST be the rule matched by property_value
             let actual_value_pair = inner.next().ok_or_else(|| ParserError::Processing(format!("Missing value pair after key '{}' in property rule: {:?}", key, prop_pair.as_str())))?;
+            trace!("Parsing property value for key '{}', rule: {:?}", key, actual_value_pair.as_rule());
 
-            // Parse the actual value rule using parse_property_value
             let value_node = parse_property_value(actual_value_pair)?;
             props.push((key, value_node));
+        } else if !matches!(prop_pair.as_rule(), Rule::WHITESPACE) {
+             // Might indicate grammar issue if non-whitespace, non-property appears
+             warn!("Unexpected rule {:?} inside properties rule: {:?}", prop_pair.as_rule(), prop_pair.as_str());
         }
     }
+    trace!("Finished parsing properties ({} found)", props.len());
     Ok(props)
 }
 
 
-/// Parses a pest pair representing a property value into an AstNode.
-/// Expects the actual value pair matched *by* the silent `property_value` rule
-/// (e.g., processor_tag, variable, object, array, or one of the literal types like number, boolean).
+/// Parses a property value into an AstNode.
 fn parse_property_value(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
+    trace!("Parsing property value rule {:?}: {:?}", pair.as_rule(), pair.as_str());
     match pair.as_rule() {
-        // Handle complex types first
         Rule::processor_tag => parse_atomic_processor(pair),
         Rule::variable => parse_atomic_variable(pair),
-        Rule::object => { // object is non-atomic { }
+        Rule::object => {
+            trace!("Parsing object property value");
             match pair.clone().into_inner().find(|p| p.as_rule() == Rule::properties) {
                 Some(props_pair) => {
                     let props = parse_properties(props_pair)?;
+                    trace!("Parsed object with {} properties", props.len());
                     Ok(AstNode::NestedObject(props))
                 }
-                None => Ok(AstNode::NestedObject(Vec::new())), // Empty object {}
+                None => {
+                    trace!("Parsed empty object {{}}");
+                    Ok(AstNode::NestedObject(Vec::new()))
+                },
             }
         }
-        Rule::array => { // array is non-atomic [ ]
+        Rule::array => {
+            trace!("Parsing array property value");
             let items = pair.clone().into_inner()
                 .filter(|p| !matches!(p.as_rule(), Rule::WHITESPACE)) // Filter only actual value rules
                 .map(parse_property_value) // Recursively parse each item
                 .collect::<Result<Vec<_>, _>>()?;
+            trace!("Parsed array with {} items", items.len());
             Ok(AstNode::NestedArray(items))
         }
-
-        // Handle literal types directly (as they might be passed directly by Pest)
+        // Delegate literal types to parse_literal
         Rule::number | Rule::boolean | Rule::null | Rule::string | Rule::quoted_string => {
-            // Delegate to parse_literal, which handles these specific types
             parse_literal(pair)
         }
-        // Handle string_content directly if it appears (e.g., inside an array parse tree)
         Rule::string_content => {
-            // Treat string_content directly as an unescaped string value
-            Ok(AstNode::NestedValue(Value::String(pair.as_str().to_string())))
+             // This case might be less common if grammar ensures string_content is wrapped
+             warn!("Directly parsing string_content as property value: {:?}", pair.as_str());
+             Ok(AstNode::NestedValue(Value::String(pair.as_str().to_string())))
         }
-
-        // Keep the literal rule as a fallback
-        Rule::literal => { // literal is silent '_'
+        Rule::literal => {
             let literal_pair = pair.clone().into_inner().next()
                 .ok_or_else(|| ParserError::Processing(format!("Empty literal pair: {:?}", pair.as_str())))?;
-            // Delegate to parse_literal with the inner actual literal rule pair
+             trace!("Descending into actual literal from property value literal rule");
             parse_literal(literal_pair)
         }
-
-        // Catch unexpected rules
         r => {
-            eprintln!("Unexpected rule type encountered during property value parsing: {:?} ({:?})", r, pair.as_str());
+            error!("Unexpected rule type encountered during property value parsing: {:?} ({:?})", r, pair.as_str());
             Err(ParserError::InvalidRule(r))
         }
     }
@@ -790,93 +880,153 @@ fn resolve_ast_nodes<P: PluginBridge + Debug>(
     nodes: &[AstNode],
     registry: &WorldInfoRegistry<P>,
 ) -> Result<Vec<Box<dyn WorldInfoNode>>, ParserError> {
+    trace!("Entering resolve_ast_nodes ({} nodes)", nodes.len());
     let mut resolved_nodes = Vec::new();
-    for node in nodes {
-        // println!("Resolving node: {:?}", node); // Reduced noise
+    for (i, node) in nodes.iter().enumerate() {
+        trace!("Resolving AST node {}/{}: {:?}", i + 1, nodes.len(), node.variant_name()); // Use a helper trait/method if needed
         match resolve_single_node(node, registry) {
-            Ok(resolved_node_list) => resolved_nodes.extend(resolved_node_list),
+            Ok(resolved_node_list) => {
+                trace!(" -> Resolved into {} WorldInfoNode(s)", resolved_node_list.len());
+                resolved_nodes.extend(resolved_node_list)
+            },
             Err(e) => {
-                eprintln!("Resolution failed for node {:?}: {}", node, e);
-                return Err(e);
+                // Error already logged in resolve_single_node or deeper
+                error!("Resolution failed for AST node {:?}: {}", node.variant_name(), e);
+                return Err(e); // Propagate the error immediately
             }
         }
     }
+    trace!("Exiting resolve_ast_nodes ({} resolved nodes)", resolved_nodes.len());
     Ok(resolved_nodes)
 }
 
+// Helper to get a name for the AST node variant for logging
+impl AstNode {
+    fn variant_name(&self) -> &'static str {
+        match self {
+            AstNode::Text(_) => "Text",
+            AstNode::Processor { .. } => "Processor",
+            AstNode::Trigger { .. } => "Trigger",
+            AstNode::Variable { .. } => "Variable",
+            AstNode::MacroIf { .. } => "MacroIf",
+            AstNode::MacroForeach { .. } => "MacroForeach",
+            AstNode::NestedValue(_) => "NestedValue",
+            AstNode::NestedArray(_) => "NestedArray",
+            AstNode::NestedObject(_) => "NestedObject",
+        }
+    }
+}
+
+
 /// Resolves a single AST node.
-/// Returns a Vec because some nodes (like macros or text containing tags) might expand into multiple nodes.
 fn resolve_single_node<P: PluginBridge + Debug>(
     node: &AstNode,
     registry: &WorldInfoRegistry<P>,
 ) -> Result<Vec<Box<dyn WorldInfoNode>>, ParserError> {
+    trace!("Entering resolve_single_node for {:?}", node.variant_name());
     match node {
         AstNode::Text(content) => {
+            trace!("Resolving Text node");
             Ok(vec![ Box::new(TextNode { content: content.clone() }) as Box<dyn WorldInfoNode> ])
         },
         AstNode::Trigger { id, raw_tag } => {
+            // NOTE: This currently just outputs the trigger tag as text.
+            // If triggers need special handling/registration, implement it here.
+            warn!("Resolving Trigger node '{}' as simple text: {}", id, raw_tag);
             Ok(vec![ Box::new(TextNode { content: format!("<trigger id=\"{}\">", id) }) as Box<dyn WorldInfoNode> ])
         }
-        AstNode::Processor { name, properties, .. } => {
+        AstNode::Processor { name, properties, raw_tag } => {
+            trace!("Resolving Processor node '{}'", name);
             let resolved_props = resolve_properties_to_json(properties, registry)?;
+            debug!("Resolved properties for processor '{}': {:?}", name, resolved_props);
             match registry.instantiate_processor(name, &resolved_props) {
-                Some(processor) => Ok(vec![processor as Box<dyn WorldInfoNode>]),
-                None => Err(ParserError::ProcessorInstantiation( name.clone(),
-                    format!("Processor not found or instantiation failed (props: {:?})", resolved_props),
-                )),
+                Some(processor) => {
+                    trace!("Successfully instantiated processor '{}'", name);
+                    Ok(vec![processor as Box<dyn WorldInfoNode>])
+                },
+                None => {
+                    error!("Processor instantiation failed for '{}' with props {:?}. Raw tag: {}", name, resolved_props, raw_tag);
+                    Err(ParserError::ProcessorInstantiation( name.clone(),
+                        format!("Processor not found or instantiation failed (props: {:?})", resolved_props),
+                    ))
+                }
             }
         }
         AstNode::Variable { raw_tag, scope, name } => {
             let full_name = format!("{}:{}", scope, name);
-            if let Some(var) = registry.get_variable(&full_name) {
-                // Ensure you have a VariableNode implementation
-                let node = VariableNode::new(var); // Assuming VariableNode::new exists and takes Value
+            trace!("Resolving Variable node '{}'", full_name);
+            if let Some(var_value) = registry.get_variable(&full_name) {
+                debug!("Found variable '{}' with value: {:?}", full_name, var_value);
+                // TODO: Handle variable scope
+                let node = VariableNode::new(var_value);
                 Ok(vec![Box::new(node) as Box<dyn WorldInfoNode>])
             } else {
+                error!("Undefined variable encountered during resolution: {}", raw_tag);
                 Err(ParserError::UndefinedVariable(format!("Variable not found: {}", raw_tag)))
             }
         }
         AstNode::MacroIf { raw_tag, condition, then_branch, else_branch } => {
-            println!("Evaluating MacroIf condition: {}", raw_tag);
-            match evaluate_expression(condition, registry) { // Uses the updated evaluate_expression
+            debug!("Resolving MacroIf: {}", raw_tag);
+            match evaluate_expression(condition, registry) {
                 Ok(condition_result) => {
-                    println!("Condition evaluated to: {:?}", condition_result);
-                    if is_truthy(&condition_result) { // Uses the updated is_truthy
-                        println!("Executing then branch for: {}", raw_tag);
-                        resolve_ast_nodes(then_branch, registry)
+                    debug!("MacroIf condition evaluated to: {:?}", condition_result);
+                    if is_truthy(&condition_result) {
+                        debug!("Executing 'then' branch for MacroIf: {}", raw_tag);
+                        resolve_ast_nodes(then_branch, registry) // Recurse
                     } else if let Some(else_nodes) = else_branch {
-                        println!("Executing else branch for: {}", raw_tag);
-                        resolve_ast_nodes(else_nodes, registry)
+                        debug!("Executing 'else' branch for MacroIf: {}", raw_tag);
+                        resolve_ast_nodes(else_nodes, registry) // Recurse
                     } else {
-                        println!("Condition false, no else branch for: {}", raw_tag);
-                        Ok(Vec::new())
+                        debug!("Condition false, no 'else' branch for MacroIf: {}", raw_tag);
+                        Ok(Vec::new()) // No nodes if condition false and no else
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error evaluating if condition for {}: {}", raw_tag, e);
-                    Err(e)
+                    error!("Error evaluating if condition for {}: {}", raw_tag, e);
+                    Err(e) // Propagate evaluation error
                 }
             }
         }
-        AstNode::MacroForeach { raw_tag, .. } => {
-            Err(ParserError::Evaluation(format!("Foreach macro evaluation not implemented: {}", raw_tag)))
+        AstNode::MacroForeach { raw_tag, item_variable, collection, body } => {
+            // TODO: Implement Foreach Resolution
+            error!("Foreach macro resolution not implemented yet: {}", raw_tag);
+             Err(ParserError::Evaluation(format!("Foreach macro evaluation not implemented: {}", raw_tag)))
+            // Implementation Sketch:
+            // 1. Evaluate `collection` expression -> Result<Value, ParserError>
+            // 2. Check if result is Value::Array or Value::Object
+            // 3. If Array: Iterate items
+            //    - For each item:
+            //      - Create a temporary scope/context for the loop iteration
+            //      - Add `item_variable` -> current item Value to the temp scope
+            //      - Resolve `body` nodes using the registry *and* the temp scope
+            //      - Append resolved nodes to the result Vec
+            // 4. If Object: Iterate key-value pairs (decide if you iterate keys, values, or pairs)
+            //    - Similar logic as array, potentially setting item_variable to key or value or a small object.
+            // 5. Handle errors (collection not iterable, resolution errors in body)
+            // 6. Return combined resolved nodes
         }
+        // These should not be present at the top level during final resolution
         AstNode::NestedValue(_) | AstNode::NestedArray(_) | AstNode::NestedObject(_) => {
-            Err(ParserError::Processing(format!("Unexpected nested AST node type during final resolution: {:?}", node)))
+             error!("Unexpected nested AST node type during final resolution: {:?}", node.variant_name());
+            Err(ParserError::Processing(format!("Unexpected nested AST node type during final resolution: {:?}", node.variant_name())))
         }
     }
 }
 
-/// Recursively resolves AST nodes within properties into a single serde_json::Value object.
+/// Recursively resolves AST nodes within properties into a serde_json::Value object.
 fn resolve_properties_to_json<P: PluginBridge + Debug>(
     properties: &[(String, AstNode)],
     registry: &WorldInfoRegistry<P>,
 ) -> Result<Value, ParserError> {
+    trace!("Entering resolve_properties_to_json ({} properties)", properties.len());
     let mut map = Map::new();
     for (key, value_node) in properties {
+        trace!("Resolving property key '{}', value type {:?}", key, value_node.variant_name());
         let resolved_value = resolve_property_value_to_json(value_node, registry)?;
+        trace!(" -> Resolved value for key '{}': {:?}", key, resolved_value);
         map.insert(key.clone(), resolved_value);
     }
+    trace!("Exiting resolve_properties_to_json");
     Ok(Value::Object(map))
 }
 
@@ -885,56 +1035,84 @@ fn resolve_property_value_to_json<P: PluginBridge + Debug>(
     node: &AstNode,
     registry: &WorldInfoRegistry<P>,
 ) -> Result<Value, ParserError> {
+     trace!("Entering resolve_property_value_to_json for {:?}", node.variant_name());
      match node {
+        // These nodes resolve by executing them and returning their string content
         AstNode::Processor { .. } | AstNode::MacroIf { .. } | AstNode::MacroForeach { .. } | AstNode::Text { .. } | AstNode::Trigger { .. } => {
+            trace!("Resolving node {:?} within property to string content", node.variant_name());
             let resolved_nodes = resolve_single_node(node, registry)?;
             let mut combined_content = String::new();
             for res_node in resolved_nodes {
-                // Ensure your WorldInfoNode trait has a content() method or similar
-                match res_node.content() {
+                match res_node.content() { // Assuming WorldInfoNode has a content() method
                     Ok(content) => combined_content.push_str(&content),
-                    Err(e) => return Err(ParserError::ProcessorExecution(format!("Failed to get content from resolved node within property: {}", e))),
+                    Err(e) => {
+                        error!("Failed to get content from resolved node {:?} within property: {}", res_node.name(), e);
+                        return Err(ParserError::ProcessorExecution(format!("Failed to get content from resolved node within property: {}", e)));
+                    }
                 }
             }
+            trace!(" -> Resolved to string: {:?}", combined_content);
             Ok(Value::String(combined_content))
         }
+        // Variables resolve to their value in the registry
          AstNode::Variable { scope, name, raw_tag } => {
             let full_name = format!("{}:{}", scope, name);
+            trace!("Resolving variable '{}' within property", full_name);
             registry.get_variable(&full_name)
-                .ok_or_else(|| ParserError::UndefinedVariable(format!("Variable not found for property value: {}", raw_tag)))
+                .map(|v| {
+                    trace!(" -> Found variable value: {:?}", v);
+                    v // Clone the value
+                })
+                .ok_or_else(|| {
+                    error!("Undefined variable encountered during property resolution: {}", raw_tag);
+                    ParserError::UndefinedVariable(format!("Variable not found for property value: {}", raw_tag))
+                })
         }
+        // Nested values might need re-parsing if they are strings containing tags
         AstNode::NestedValue(v) => {
+             trace!("Resolving NestedValue within property: {:?}", v);
              if let Value::String(s) = v {
                 // Check if the string itself contains tags that need evaluation
                 if s.contains("@[") || s.contains("<trigger") || s.contains("{{") || s.contains("{#") {
-                    // println!("String literal contains tags, re-parsing and evaluating: {:?}", s); // Reduced noise
+                    debug!("String literal contains tags, re-parsing/evaluating: {:?}", s);
+                    // Re-parse the string content as if it were top-level input
                     let inner_resolved_nodes = parse_entry_content(s, registry)?;
                     let mut combined_content = String::new();
                     for res_node in inner_resolved_nodes {
-                         // Ensure your WorldInfoNode trait has a content() method or similar
                         match res_node.content() {
                             Ok(content) => combined_content.push_str(&content),
-                            Err(e) => return Err(ParserError::ProcessorExecution(format!("Failed to get content from re-parsed string node: {}", e))),
+                            Err(e) => {
+                                error!("Failed to get content from re-parsed string node: {}", e);
+                                return Err(ParserError::ProcessorExecution(format!("Failed to get content from re-parsed string node: {}", e)));
+                            }
                         }
                     }
+                    trace!(" -> Re-parsed string resolved to: {:?}", combined_content);
                     Ok(Value::String(combined_content))
                 } else {
                     // String literal has no tags, use it directly
+                    trace!(" -> Using string literal directly");
                     Ok(v.clone())
                 }
             } else {
                 // Not a string, just clone the literal value (Number, Bool, Null)
+                 trace!(" -> Using non-string literal directly");
                 Ok(v.clone())
             }
         }
+        // Arrays resolve by resolving each item
         AstNode::NestedArray(items) => {
+            trace!("Resolving NestedArray within property ({} items)", items.len());
             let resolved_items = items.iter()
-                .map(|item_node| resolve_property_value_to_json(item_node, registry))
+                .map(|item_node| resolve_property_value_to_json(item_node, registry)) // Recurse
                 .collect::<Result<Vec<_>, _>>()?;
+            trace!(" -> Resolved array: {:?}", resolved_items);
             Ok(Value::Array(resolved_items))
         }
+        // Objects resolve by resolving their properties (recursive call)
         AstNode::NestedObject(props) => {
-            resolve_properties_to_json(props, registry)
+             trace!("Resolving NestedObject within property ({} props)", props.len());
+            resolve_properties_to_json(props, registry) // Recurse
         }
     }
 }
@@ -942,7 +1120,7 @@ fn resolve_property_value_to_json<P: PluginBridge + Debug>(
 
 // --- Evaluation Logic ---
 
-// Helper function to get variant name for error messages
+// Helper trait for logging Value types
 trait VariantName { fn variant_name(&self) -> &'static str; }
 impl VariantName for Value {
     fn variant_name(&self) -> &'static str {
@@ -953,189 +1131,184 @@ impl VariantName for Value {
     }
 }
 
-/// Evaluates an Expression AST node to a serde_json::Value using the registry for variable lookups.
+/// Evaluates an Expression AST node to a serde_json::Value.
 fn evaluate_expression<P: PluginBridge + Debug>(
     expr: &Expression,
     registry: &WorldInfoRegistry<P>,
-    // TODO: Add context like loop variables here if needed
 ) -> Result<Value, ParserError> {
-    println!("EVAL: {:?}", expr); // Log the expression being evaluated
+    // Use debug! for expression evaluation steps
+    debug!("EVAL EXPR: {:?}", expr);
     match expr {
         Expression::Literal(value) => {
-            println!("  -> Literal: {:?}", value);
+            debug!("  -> Literal: {:?}", value);
             Ok(value.clone())
         },
         Expression::Variable { scope, name, raw_tag } => {
             let full_name = format!("{}:{}", scope, name);
+            debug!("  -> Variable Lookup: {}", full_name);
             let result = registry.get_variable(&full_name)
-                .ok_or_else(|| ParserError::UndefinedVariable(format!("Variable not found during evaluation: {}", raw_tag)));
-            println!("  -> Variable {}: {:?}", raw_tag, result);
+                .ok_or_else(|| {
+                    error!("Undefined variable during expression evaluation: {}", raw_tag);
+                    ParserError::UndefinedVariable(format!("Variable not found during evaluation: {}", raw_tag))
+                });
+            debug!("  -> Variable Result: {:?}", result);
             result
         }
         Expression::Processor { name, properties, raw_tag } => {
-            println!("  -> Processor Eval Start: {}", raw_tag);
-            // 1. Resolve properties AST to JSON Value
+            debug!("  -> Processor Eval Start: {}", raw_tag);
             let resolved_props = resolve_properties_to_json(properties, registry)?;
-            println!("  -> Processor Resolved Props: {:?}", resolved_props);
+            debug!("  -> Processor Resolved Props: {:?}", resolved_props);
 
-            // 2. Instantiate the processor
             let processor_instance = registry.instantiate_processor(name, &resolved_props)
-            .ok_or_else(|| ParserError::ProcessorInstantiation( name.clone(),
-                format!("Processor '{}' not found or instantiation failed during expression evaluation (props: {:?})", name, resolved_props),
-            ))?;
-            println!("  -> Processor Instantiated: {}", name);
+            .ok_or_else(|| {
+                 error!("Processor instantiation failed during expression evaluation for '{}' with props {:?}. Raw tag: {}", name, resolved_props, raw_tag);
+                 ParserError::ProcessorInstantiation( name.clone(),
+                    format!("Processor '{}' not found or instantiation failed during expression evaluation (props: {:?})", name, resolved_props),
+                )
+            })?;
+            debug!("  -> Processor Instantiated: {}", name);
 
-            // 3. Execute the processor (assuming content() is the execution method)
-            let content_result = processor_instance.content(); // Assuming returns Result<String, ProcessorError>
-            println!("  -> Processor Content Result: {:?}", content_result);
+            let content_result = processor_instance.content();
+            debug!("  -> Processor Content Result: {:?}", content_result);
 
-            // 4. Convert result to Value (attempt Number first, then String)
             match content_result {
                 Ok(content_str) => {
-                    // Try parsing as f64, then create Value::Number
+                    // Try parsing as number first
                     if let Ok(num_f64) = content_str.parse::<f64>() {
                         if let Some(num) = serde_json::Number::from_f64(num_f64) {
-                            println!("  -> Processor Result as Number: {:?}", num);
+                            debug!("  -> Processor Result as Number: {:?}", num);
                             Ok(Value::Number(num))
                         } else {
-                            // If f64 is valid but not representable (NaN, Infinity), treat as string
-                            println!("  -> Processor Result (f64) not representable, using String: {:?}", content_str);
+                            warn!("Processor '{}' result '{}' is valid f64 but not representable as JSON number (NaN/Infinity?), using String.", name, content_str);
                             Ok(Value::String(content_str))
                         }
                     } else {
-                        // If parsing as f64 fails, treat as String
-                        println!("  -> Processor Result as String: {:?}", content_str);
+                        debug!("  -> Processor Result as String: {:?}", content_str);
                         Ok(Value::String(content_str))
                     }
                 }
                 Err(e) => {
-                    // Propagate processor execution errors
+                    error!("Error executing processor '{}' in expression: {}", name, e);
                     Err(ParserError::ProcessorExecution(format!("Error executing processor '{}' in expression: {}", name, e)))
                 }
             }
         }
         Expression::UnaryOperation { operator, operand } => {
-            println!("  -> Unary Op: {:?}", operator);
-            let operand_value = evaluate_expression(operand, registry)?;
+            debug!("  -> Unary Op: {:?}", operator);
+            let operand_value = evaluate_expression(operand, registry)?; // Recurse
+            debug!("  -> Unary Operand Value: {:?}", operand_value);
             let result = match operator {
                 UnaryOperator::Not => Ok(Value::Bool(!is_truthy(&operand_value))),
             };
-            println!("  -> Unary Result: {:?}", result);
+            debug!("  -> Unary Result: {:?}", result);
             result
         }
         Expression::BinaryOperation { left, operator, right } => {
-            println!("  -> Binary Op: {:?}", operator);
-            // Evaluate left operand first
-            let left_value = evaluate_expression(left, registry)?;
+            debug!("  -> Binary Op: {:?}", operator);
+            let left_value = evaluate_expression(left, registry)?; // Recurse left
+            debug!("  -> Binary Left Value: {:?}", left_value);
 
             // Short-circuit evaluation for || and &&
             match operator {
                 BinaryOperator::Or => {
                     let is_left_truthy = is_truthy(&left_value);
-                    println!("  -> OR Left Value: {:?}, Truthy: {}", left_value, is_left_truthy);
-                    if is_left_truthy { return Ok(Value::Bool(true)); }
-                    println!("  -> OR Evaluating Right");
-                    let right_value = evaluate_expression(right, registry)?;
-                    let result = Value::Bool(is_truthy(&right_value));
-                    println!("  -> OR Right Value: {:?}, Result: {:?}", right_value, result);
-                    return Ok(result);
+                    debug!("  -> OR Left Truthy: {}", is_left_truthy);
+                    if is_left_truthy { return Ok(left_value); } // Return the left value if truthy
+                    debug!("  -> OR Evaluating Right");
+                    let right_value = evaluate_expression(right, registry)?; // Recurse right only if needed
+                    debug!("  -> OR Right Value: {:?}", right_value);
+                    return Ok(right_value); // Return the right value
                 }
                 BinaryOperator::And => {
                     let is_left_truthy = is_truthy(&left_value);
-                    println!("  -> AND Left Value: {:?}, Truthy: {}", left_value, is_left_truthy);
-                    if !is_left_truthy { return Ok(Value::Bool(false)); }
-                    println!("  -> AND Evaluating Right");
-                    let right_value = evaluate_expression(right, registry)?;
-                    let result = Value::Bool(is_truthy(&right_value));
-                    println!("  -> AND Right Value: {:?}, Result: {:?}", right_value, result);
-                    return Ok(result);
+                     debug!("  -> AND Left Truthy: {}", is_left_truthy);
+                    if !is_left_truthy { return Ok(left_value); } // Return the left value if falsy
+                     debug!("  -> AND Evaluating Right");
+                    let right_value = evaluate_expression(right, registry)?; // Recurse right only if needed
+                    debug!("  -> AND Right Value: {:?}", right_value);
+                    return Ok(right_value); // Return the right value
                 }
-                _ => {} // Continue for comparison and arithmetic operators
+                _ => {} // Continue for comparison and arithmetic
             }
 
-            // Evaluate right operand only if not short-circuited
-            println!("  -> Binary Op Evaluating Right");
-            let right_value = evaluate_expression(right, registry)?;
-            // Use the updated evaluation function
+            // Evaluate right operand for non-short-circuiting ops
+            debug!("  -> Binary Op Evaluating Right");
+            let right_value = evaluate_expression(right, registry)?; // Recurse right
+            debug!("  -> Binary Right Value: {:?}", right_value);
+            // Delegate actual operation
             evaluate_binary_operation(&left_value, *operator, &right_value)
         }
     }
 }
 
-/// Determines the truthiness of a serde_json::Value according to common dynamic language rules.
+/// Determines the truthiness of a serde_json::Value.
 fn is_truthy(value: &Value) -> bool {
-    match value {
+    let result = match value {
         Value::Null => false,
         Value::Bool(b) => *b,
-        Value::Number(n) => {
-            n.as_f64().map_or(false, |f| f != 0.0)
-        },
+        Value::Number(n) => n.as_f64().map_or(false, |f| f != 0.0), // Consider 0 as false
         Value::String(s) => !s.is_empty(),
         Value::Array(a) => !a.is_empty(),
         Value::Object(o) => !o.is_empty(),
-    }
+    };
+    trace!("is_truthy({:?}) -> {}", value, result);
+    result
 }
 
-/// Performs binary comparisons between two serde_json::Values.
+/// Performs binary operations between two serde_json::Values.
 fn evaluate_binary_operation(left: &Value, op: BinaryOperator, right: &Value) -> Result<Value, ParserError> {
-    println!("  -> Op {:?}: Left: {:?}, Right: {:?}", op, left, right); // Log operands
+    debug!("  -> Eval Bin Op {:?}: Left: {:?}, Right: {:?}", op, left, right);
     let result = match op {
         // --- Comparisons ---
         BinaryOperator::Eq | BinaryOperator::Neq => {
-            // Special handling for numbers: compare as f64
-            match (left, right) {
-                (Value::Number(l), Value::Number(r)) => {
-                    let l_f64 = l.as_f64();
-                    let r_f64 = r.as_f64();
-                    if let (Some(l_val), Some(r_val)) = (l_f64, r_f64) {
-                        Ok(Value::Bool(if op == BinaryOperator::Eq { l_val == r_val } else { l_val != r_val }))
-                    } else {
-                        // Fallback to strict equality if conversion fails (unlikely for Number)
-                        Ok(Value::Bool(if op == BinaryOperator::Eq { left == right } else { left != right }))
-                    }
-                }
-                // For non-numeric types, use default PartialEq
-                _ => Ok(Value::Bool(if op == BinaryOperator::Eq { left == right } else { left != right })),
-            }
+            // Use PartialEq for direct comparison, handles types correctly
+            let are_equal = left == right;
+            Ok(Value::Bool(if op == BinaryOperator::Eq { are_equal } else { !are_equal }))
         }
         BinaryOperator::Lt | BinaryOperator::Gt | BinaryOperator::Lte | BinaryOperator::Gte => {
-            // Ordered comparisons: Primarily for numbers, potentially strings.
             match (left, right) {
+                // Number comparison
                 (Value::Number(l), Value::Number(r)) => {
-                    let l_f64 = l.as_f64();
-                    let r_f64 = r.as_f64();
-                    if let (Some(l_val), Some(r_val)) = (l_f64, r_f64) {
-                        Ok(Value::Bool(match op {
-                            BinaryOperator::Lt => l_val < r_val,
-                            BinaryOperator::Gt => l_val > r_val,
-                            BinaryOperator::Lte => l_val <= r_val,
-                            BinaryOperator::Gte => l_val >= r_val,
-                            _ => unreachable!(), // Eq/Neq handled above
-                        }))
-                    } else {
-                        Err(ParserError::Evaluation(format!("Failed to compare numbers as f64: {:?}, {:?}", left, right)))
+                    match (l.as_f64(), r.as_f64()) {
+                        (Some(l_f64), Some(r_f64)) => {
+                             Ok(Value::Bool(match op {
+                                BinaryOperator::Lt => l_f64 < r_f64, BinaryOperator::Gt => l_f64 > r_f64,
+                                BinaryOperator::Lte => l_f64 <= r_f64, BinaryOperator::Gte => l_f64 >= r_f64,
+                                _ => unreachable!(),
+                            }))
+                        }
+                        _ => {
+                            // Handle potential non-f64 representable numbers if necessary,
+                            // or error if comparison isn't possible.
+                            error!("Cannot compare non-f64 numbers: {:?}, {:?}", l, r);
+                            Err(ParserError::Evaluation(format!("Cannot compare non-f64 numbers: {:?}, {:?}", l, r)))
+                        }
                     }
                 }
+                // String comparison
                 (Value::String(l_str), Value::String(r_str)) => {
-                    Ok(Value::Bool(match op {
-                        BinaryOperator::Lt => l_str < r_str,
-                        BinaryOperator::Gt => l_str > r_str,
-                        BinaryOperator::Lte => l_str <= r_str,
-                        BinaryOperator::Gte => l_str >= r_str,
-                        _ => unreachable!(), // Eq/Neq handled above
+                     Ok(Value::Bool(match op {
+                        BinaryOperator::Lt => l_str < r_str, BinaryOperator::Gt => l_str > r_str,
+                        BinaryOperator::Lte => l_str <= r_str, BinaryOperator::Gte => l_str >= r_str,
+                        _ => unreachable!(),
                     }))
                 }
-                _ => Err(ParserError::Evaluation(format!("Cannot apply ordered comparison ({:?}) to types {:?} and {:?}", op, left.variant_name(), right.variant_name()))),
+                // Type mismatch error
+                _ => {
+                    error!("Cannot apply ordered comparison ({:?}) to types {:?} and {:?}", op, left.variant_name(), right.variant_name());
+                    Err(ParserError::Evaluation(format!("Cannot apply ordered comparison ({:?}) to types {:?} and {:?}", op, left.variant_name(), right.variant_name())))
+                }
             }
         }
 
         // --- Arithmetic ---
         BinaryOperator::Add | BinaryOperator::Sub | BinaryOperator::Mul | BinaryOperator::Div => {
-            match (left, right) {
+             match (left, right) {
                 (Value::Number(l), Value::Number(r)) => {
+                    // Perform arithmetic using f64
                     let l_f64 = l.as_f64().ok_or_else(|| ParserError::Evaluation(format!("Left operand is not a valid f64 for arithmetic: {:?}", l)))?;
                     let r_f64 = r.as_f64().ok_or_else(|| ParserError::Evaluation(format!("Right operand is not a valid f64 for arithmetic: {:?}", r)))?;
-                    println!("  -> Arithmetic f64: Left: {}, Right: {}", l_f64, r_f64); // Log f64 values
+                    trace!("  -> Arithmetic f64: Left: {}, Right: {}", l_f64, r_f64);
 
                     let result_f64 = match op {
                         BinaryOperator::Add => l_f64 + r_f64,
@@ -1143,24 +1316,34 @@ fn evaluate_binary_operation(left: &Value, op: BinaryOperator, right: &Value) ->
                         BinaryOperator::Mul => l_f64 * r_f64,
                         BinaryOperator::Div => {
                             if r_f64 == 0.0 {
+                                error!("Division by zero attempted: {} / {}", l_f64, r_f64);
                                 return Err(ParserError::Evaluation("Division by zero".to_string()));
                             }
                             l_f64 / r_f64
                         }
                         _ => unreachable!(),
                     };
-                    println!("  -> Arithmetic f64 Result: {}", result_f64); // Log f64 result
+                    trace!("  -> Arithmetic f64 Result: {}", result_f64);
 
+                    // Convert back to JSON Number, handling potential NaN/Infinity
                     serde_json::Number::from_f64(result_f64)
                         .map(Value::Number)
-                        .ok_or_else(|| ParserError::Evaluation(format!("Arithmetic result is not representable as JSON number: {}", result_f64)))
+                        .ok_or_else(|| {
+                             error!("Arithmetic result is not representable as JSON number: {}", result_f64);
+                             ParserError::Evaluation(format!("Arithmetic result is not representable as JSON number: {}", result_f64))
+                        })
                 }
-                _ => Err(ParserError::Evaluation(format!("Cannot apply arithmetic operation ({:?}) to types {:?} and {:?}", op, left.variant_name(), right.variant_name()))),
+                 // Type mismatch error
+                _ => {
+                     error!("Cannot apply arithmetic operation ({:?}) to types {:?} and {:?}", op, left.variant_name(), right.variant_name());
+                     Err(ParserError::Evaluation(format!("Cannot apply arithmetic operation ({:?}) to types {:?} and {:?}", op, left.variant_name(), right.variant_name())))
+                }
             }
         }
-        // And/Or are handled by short-circuiting in evaluate_expression
+        // And/Or handled by short-circuiting earlier
         BinaryOperator::And | BinaryOperator::Or => unreachable!("Logical operators should be handled by short-circuiting"),
     };
-    println!("  -> Op Result: {:?}", result); // Log final result of operation
+    debug!("  -> Op Result: {:?}", result);
     result
 }
+
