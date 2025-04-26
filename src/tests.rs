@@ -149,18 +149,20 @@ mod tests {
     
     #[test]
     fn test_if_macro() {
-        use crate::core::processors::WorldInfoRegistry;
+        use crate::core::processors::{WorldInfoRegistry, RngProcessorFactory};
         use crate::{WorldInfo, EntryFactory, WorldInfoFactory};
         use std::sync::Arc;
 
         let mut registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
+        registry.register_processor("weaver.core.rng", Box::new(RngProcessorFactory));
         registry.register_variable("global:test".to_string(), true.into());
+        registry.register_variable("global:counter".to_string(), 0.into());
 
         let input = r#"
-        {# if {{global:test}} == true #}
-            It seems the variable is true!
+        {# if {{global:test}} == true && (true == true && {{global:counter}} + @[weaver.core.rng(min: 0, max: 10)] > 5) #}
+            The prophecy is true!
         {# else #}
-            It seems the variable is false!
+            The prophecy is but a mere hoax!
         {# endif #}
         "#;
 

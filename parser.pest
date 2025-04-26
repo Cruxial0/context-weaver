@@ -10,7 +10,6 @@ WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 text = @{ (!("@[" | "<trigger" | "{{" | "{#") ~ ANY)+ }
 
 // --- Processor Tag: @[name(props)] ---
-// Non-atomic content rule for top-level matching
 processor_tag_content = { processor_start ~ processor_name ~ ( "(" ~ properties? ~ ")" )? ~ processor_end }
 processor_start = @{ "@[" }
 processor_name = @{ identifier ~ ("." ~ identifier)* }
@@ -20,7 +19,6 @@ processor_tag = @{ processor_start ~ processor_name ~ ( "(" ~ properties? ~ ")" 
 
 
 // --- Trigger Tag: <trigger id=X> ---
-// Non-atomic content rule for top-level matching
 trigger_tag_content = { trigger_start ~ trigger_attributes? ~ trigger_end }
 trigger_start = @{ "<trigger" }
 trigger_attributes = { WHITESPACE+ ~ trigger_attribute ~ (WHITESPACE+ ~ trigger_attribute)* ~ WHITESPACE* }
@@ -28,12 +26,10 @@ trigger_attribute = { trigger_key ~ "=" ~ trigger_value }
 trigger_key = @{ "id" }
 trigger_value = _{ quoted_string }
 trigger_end = @{ ">" }
-// Atomic rule (if needed elsewhere, though not currently used in properties)
-// trigger_tag = @{ trigger_start ~ trigger_attributes? ~ trigger_end }
+// trigger_tag = @{ trigger_start ~ trigger_attributes? ~ trigger_end } // Not currently needed
 
 
 // --- Scoped Variable: {{scope:name}} ---
-// Non-atomic content rule for top-level matching
 variable_tag_content = { variable_start ~ scope ~ variable_separator ~ name ~ variable_end }
 variable_start = @{ "{{" }
 scope = @{ identifier }
@@ -45,7 +41,7 @@ variable = @{ variable_start ~ scope ~ variable_separator ~ name ~ variable_end 
 
 
 // --- Macros: {# if ... #}, {# foreach ... #} ---
-macro_tag = { macro_if | macro_foreach } // Non-atomic container
+macro_tag = { macro_if | macro_foreach }
 
 // If Macro: {# if condition #} ... {# else #} ... {# endif #}
 macro_if = { macro_if_start ~ expression ~ macro_tag_end ~ inner_nodes ~ macro_else? ~ macro_endif }
@@ -55,46 +51,45 @@ macro_else_tag = @{ "{# else #}" }
 macro_endif = @{ "{# endif #}" }
 
 // Foreach Macro: {# foreach item in collection #} ... {# endforeach #}
-// Note: The collection part now also uses the enhanced 'expression' rule
 macro_foreach = { macro_foreach_start ~ identifier ~ WHITESPACE+ ~ "in" ~ WHITESPACE+ ~ expression ~ macro_tag_end ~ inner_nodes ~ macro_endforeach }
 macro_foreach_start = @{ "{# foreach" ~ WHITESPACE+ }
 macro_endforeach = @{ "{# endforeach #}" }
 
 macro_tag_end = @{ WHITESPACE* ~ "#}" }
-// Ensure inner_nodes can parse the top-level tag content rules
 inner_nodes = { (macro_tag | processor_tag_content | trigger_tag_content | variable_tag_content | text)* }
 
 
-// --- Expressions (Enhanced for Comparisons and Logic) ---
+// --- Expressions (Enhanced for Arithmetic, Comparisons, and Logic) ---
 // Use Pest's built-in precedence climber
 expression = {
-    logical_or
+    logical_or  // Lowest precedence
 }
 
-// Define operator precedence levels
+// Define operator precedence levels (from lowest to highest)
 logical_or = { logical_and ~ ( or_op ~ logical_and )* }
 logical_and = { comparison ~ ( and_op ~ comparison )* }
-comparison = { term ~ ( comp_op ~ term )* }
-// Add other levels like addition/subtraction, multiplication/division if needed later
+comparison = { addition_subtraction ~ ( comp_op ~ addition_subtraction )* } // Compare results of arithmetic
+addition_subtraction = { multiplication_division ~ ( (add_op | sub_op) ~ multiplication_division )* } // +/- have same precedence
+multiplication_division = { unary_prefix ~ ( (mul_op | div_op) ~ unary_prefix )* } // * / have same precedence, higher than +/-
+unary_prefix = { not_op ~ unary_prefix | term } // Unary prefix has high precedence
 
-// Basic term: literals, variables, negation, or grouped expressions
-term = _{ literal | variable | negation | "(" ~ expression ~ ")" }
+// Basic term: literals, variables, processors, or grouped expressions
+term = _{ literal | variable | processor_tag | "(" ~ expression ~ ")" }
 
 // Operator Rules
 comp_op = @{ "==" | "!=" | "<=" | ">=" | "<" | ">" }
 and_op = @{ "&&" }
 or_op = @{ "||" }
+add_op = @{ "+" }
+sub_op = @{ "-" }
+mul_op = @{ "*" }
+div_op = @{ "/" }
 not_op = @{ "!" }
-
-// Negation (Unary Prefix Operator)
-negation = { not_op ~ term }
-
 
 // --- Properties for Processors (Pseudo-JSON) ---
 properties = { property ~ (WHITESPACE* ~ "," ~ WHITESPACE* ~ property)* ~ WHITESPACE* }
 property = { property_key ~ WHITESPACE* ~ ":" ~ WHITESPACE* ~ property_value }
 property_key = @{ identifier | quoted_string }
-// Uses atomic tags/variable rule within properties
 property_value = _{
     processor_tag // Atomic processor tag @[...]
     | variable    // Atomic variable tag {{...}}
@@ -105,7 +100,7 @@ property_value = _{
 
 // --- Literals ---
 literal = _{ string | number | boolean | null }
-string = _{ quoted_string } // string is silent, matches quoted_string
+string = _{ quoted_string }
 number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ (^"e" | ^"E")? ~ ("+" | "-")? ~ ASCII_DIGIT* }
 boolean = @{ "true" | "false" }
 null = @{ "null" }
