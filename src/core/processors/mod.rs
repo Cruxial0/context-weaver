@@ -1,12 +1,61 @@
 use std::{collections::HashMap, sync::{Arc, RwLock}};
 use serde::de::DeserializeOwned;
-use crate::{WorldInfoNode, WorldInfoProcessor};
+use crate::{ParserError, WorldInfoError, WorldInfoNode, WorldInfoProcessor};
 use std::fmt::Debug;
 
 pub struct WorldInfoRegistry<P: PluginBridge + 'static> {
     processor_factories: RwLock<HashMap<String, Box<dyn WorldInfoProcessorFactory<P>>>>,
     plugin_bridge: Arc<P>,
     variables: HashMap<String, serde_json::Value>
+}
+
+pub struct ScopedRegistry<'a, P: PluginBridge + 'static> {
+    inner: &'a WorldInfoRegistry<P>,
+    allowed_scopes: &'a [String],
+    scope_id: String
+}
+
+impl <'a, P: PluginBridge + 'static> ScopedRegistry<'a, P> {
+    pub fn instantiate_processor(&self, name: &str, props: &serde_json::Value) -> Option<Box<dyn WorldInfoNode>> {
+        self.inner.instantiate_processor(name, props)
+    }
+}
+
+pub trait VariableResolver {
+    fn get_variable(&self, name: &str) -> Result<serde_json::Value, ParserError>;
+
+    /// Resolves implicit scopes
+    /// 
+    /// # Example
+    /// 
+    /// `entry:foo` -> `<scope_id>:foo`
+    fn resolve_scope(&self, name: &str) -> Result<(String, String), ParserError>;
+}
+
+impl<'a, P: PluginBridge> VariableResolver for ScopedRegistry<'a, P> {
+    fn get_variable(&self, name: &str) -> Result<serde_json::Value, ParserError> {
+        let (scope, name) = self.resolve_scope(name)?;
+        let key = format!("{}:{}", scope, name);
+        if self.allowed_scopes.contains(&scope) {
+            if let Some(val) = self.inner.variables.get(&key){
+                return Ok(val.clone());
+            } else {
+                // Insufficient Permissions
+                return Err(ParserError::InsufficientPermissions(format!("Insufficient permissions to access variable {}", name)));
+            }
+        }
+        
+        Err(ParserError::UndefinedVariable(name.to_string()))
+    }
+    
+    fn resolve_scope(&self, name: &str) -> Result<(String, String), ParserError> {
+        let (scope, name) = name.split_once(':').ok_or(ParserError::UndefinedVariable(name.to_string()))?;
+
+        match scope {
+            "entry" | "local" => Ok((self.scope_id.clone(), name.to_string())),
+            _ => Ok((scope.to_string(), name.to_string()))
+        }
+    }
 }
 
 impl<P: PluginBridge + 'static> WorldInfoRegistry<P> {
@@ -47,6 +96,10 @@ impl<P: PluginBridge + 'static> WorldInfoRegistry<P> {
 
     pub fn get_variable(&self, name: &str) -> Option<serde_json::Value> {
         self.variables.get(name).cloned()
+    }
+
+    pub(crate) fn scoped_registry<'a>(&'a self, allowed_scopes: &'a [String], scope_id: String) -> ScopedRegistry<'a, P> {
+        ScopedRegistry { inner: self, allowed_scopes, scope_id }
     }
     
 }

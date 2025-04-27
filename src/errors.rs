@@ -45,6 +45,9 @@ pub enum ParserError {
     #[error("Undefined variable: {0}")]
     UndefinedVariable(String),
 
+    #[error("Insufficient permissions: {0}")]
+    InsufficientPermissions(String),
+
     #[error("Type error: {0}")]
     TypeError(String),
 

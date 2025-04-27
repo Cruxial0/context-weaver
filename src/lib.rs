@@ -1,4 +1,4 @@
-use core::processors::{PluginBridge, WorldInfoRegistry};
+use core::processors::{PluginBridge, ScopedRegistry, WorldInfoRegistry};
 use std::fmt::Debug;
 
 use parser::parse_entry_content;
@@ -26,7 +26,10 @@ impl<P: PluginBridge> WorldInfo<P>{
         let mut result = String::new();
         let mut failed = false;
         for entry in &mut self.entries {
-            match entry.parse(&self.processor_registry) {
+            let scopes = &entry.scopes.clone();
+            let id = entry.id();
+            let scoped_registry = &self.processor_registry.scoped_registry(scopes, id);
+            match entry.parse(scoped_registry) {
                 Ok(_) => (),
                 Err(e) => {
                     self.error_stack.push(e);
@@ -76,8 +79,6 @@ pub trait WorldInfoFactory<P: PluginBridge> {
         }
         self
     }
-
-    
 }
 
 impl<P: PluginBridge> WorldInfoFactory<P> for WorldInfo<P> {
@@ -167,16 +168,16 @@ impl WorldInfoEntry {
 pub trait EntryFactory {
     fn create(name: &str, id: String, order: u32) -> WorldInfoEntry;
     fn set_text(&mut self, text: &str) -> &mut WorldInfoEntry;
-    fn parse<P: PluginBridge>(&mut self, registry: &WorldInfoRegistry<P>) -> Result<&mut WorldInfoEntry, WorldInfoError>;
+    fn parse<P: PluginBridge>(&mut self, registry: &ScopedRegistry<P>) -> Result<&mut WorldInfoEntry, WorldInfoError>;
 }
 
 impl EntryFactory for WorldInfoEntry {
     fn create(name: &str, id: String, order: u32) -> WorldInfoEntry {
         WorldInfoEntry::new(name.to_string(), id, order)
     }
-    fn parse<P: PluginBridge>(&mut self, registry: &WorldInfoRegistry<P>) -> Result<&mut WorldInfoEntry, WorldInfoError> {
+    fn parse<P: PluginBridge>(&mut self, registry: &ScopedRegistry<P>) -> Result<&mut WorldInfoEntry, WorldInfoError> {
         log::debug!("Parsing node: {:?}", self.text);
-        match parse_entry_content(&self.text, registry) {
+        match parse_entry_content(&self.text, registry, &self.id) {
             Ok(nodes) => self.nodes = nodes,
             Err(e) => return Err(WorldInfoError::ParserError(e)),
         }

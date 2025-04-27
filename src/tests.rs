@@ -174,7 +174,7 @@ mod tests {
         registry.register_variable("global:counter".to_string(), 0.into());
 
         let input = r#"
-        {# if {{global:test}} == true && (true == true && {{global:counter}} + @[weaver.core.rng(min: 0, max: 10)] > 5) #}
+        {# if {{global:test}} == true && (true == true && {{abc:counter}} + @[weaver.core.rng(min: 0, max: 10)] > 5) #}
             The prophecy is true!
         {# else #}
             The prophecy is but a mere hoax!

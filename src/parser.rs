@@ -2,7 +2,7 @@
 
 // --- Crates ---
 use crate::core::nodes::{TextNode, VariableNode};
-use crate::core::processors::{PluginBridge, WorldInfoRegistry};
+use crate::core::processors::{PluginBridge, ScopedRegistry, VariableResolver};
 use crate::errors::ParserError;
 use crate::WorldInfoNode; // Placeholder imports
 use pest::iterators::{Pair, Pairs};
@@ -139,8 +139,8 @@ fn parse_expression_pratt(pairs: Pairs<Rule>) -> Result<Expression, ParserError>
                 }
             }
             rule => {
-                 error!("Unexpected primary rule in Pratt parser: {:?} ({})", rule, primary.as_str());
-                 Err(ParserError::Processing(format!("Unexpected primary rule: {:?}", rule)))
+                error!("Unexpected primary rule in Pratt parser: {:?} ({})", rule, primary.as_str());
+                Err(ParserError::Processing(format!("Unexpected primary rule: {:?}", rule)))
             }
         }})
         .map_prefix(|op, rhs| {
@@ -195,7 +195,8 @@ fn parse_expression_pratt(pairs: Pairs<Rule>) -> Result<Expression, ParserError>
 /// Parses the raw input string into resolved WorldInfoNode objects.
 pub fn parse_entry_content<P: PluginBridge + Debug>(
     raw: &str,
-    registry: &WorldInfoRegistry<P>,
+    registry: &ScopedRegistry<P>,
+    entry_id: &String
 ) -> Result<Vec<Box<dyn WorldInfoNode>>, ParserError> {
     info!("Parsing input (first 50 chars): {:?}", raw.chars().take(50).collect::<String>());
     trace!("Full raw input: {:?}", raw); // Use trace for potentially large input
@@ -219,7 +220,7 @@ pub fn parse_entry_content<P: PluginBridge + Debug>(
     let ast = build_ast_from_pairs::<P>(&mut inner_pairs)?;
     debug!("Built AST: {:?}", ast); // Debug level for AST structure
 
-    let resolved = resolve_ast_nodes(&ast, registry)?;
+    let resolved = resolve_ast_nodes(&ast, registry, entry_id)?;
     debug!("Resolved Nodes (count: {}): {:?}", resolved.len(), resolved.iter().map(|n| n.name()).collect::<Vec<_>>());
     Ok(resolved)
 }
@@ -878,13 +879,14 @@ fn parse_property_value(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
 /// Resolves a list of AST nodes into final WorldInfoNode objects.
 fn resolve_ast_nodes<P: PluginBridge + Debug>(
     nodes: &[AstNode],
-    registry: &WorldInfoRegistry<P>,
+    registry: &ScopedRegistry<P>,
+    entry_id: &String
 ) -> Result<Vec<Box<dyn WorldInfoNode>>, ParserError> {
     trace!("Entering resolve_ast_nodes ({} nodes)", nodes.len());
     let mut resolved_nodes = Vec::new();
     for (i, node) in nodes.iter().enumerate() {
         trace!("Resolving AST node {}/{}: {:?}", i + 1, nodes.len(), node.variant_name()); // Use a helper trait/method if needed
-        match resolve_single_node(node, registry) {
+        match resolve_single_node(node, registry, entry_id) {
             Ok(resolved_node_list) => {
                 trace!(" -> Resolved into {} WorldInfoNode(s)", resolved_node_list.len());
                 resolved_nodes.extend(resolved_node_list)
@@ -921,7 +923,8 @@ impl AstNode {
 /// Resolves a single AST node.
 fn resolve_single_node<P: PluginBridge + Debug>(
     node: &AstNode,
-    registry: &WorldInfoRegistry<P>,
+    registry: &ScopedRegistry<P>,
+    entry_id: &String
 ) -> Result<Vec<Box<dyn WorldInfoNode>>, ParserError> {
     trace!("Entering resolve_single_node for {:?}", node.variant_name());
     match node {
@@ -937,7 +940,7 @@ fn resolve_single_node<P: PluginBridge + Debug>(
         }
         AstNode::Processor { name, properties, raw_tag } => {
             trace!("Resolving Processor node '{}'", name);
-            let resolved_props = resolve_properties_to_json(properties, registry)?;
+            let resolved_props = resolve_properties_to_json(properties, registry, entry_id)?;
             debug!("Resolved properties for processor '{}': {:?}", name, resolved_props);
             match registry.instantiate_processor(name, &resolved_props) {
                 Some(processor) => {
@@ -955,27 +958,25 @@ fn resolve_single_node<P: PluginBridge + Debug>(
         AstNode::Variable { raw_tag, scope, name } => {
             let full_name = format!("{}:{}", scope, name);
             trace!("Resolving Variable node '{}'", full_name);
-            if let Some(var_value) = registry.get_variable(&full_name) {
-                debug!("Found variable '{}' with value: {:?}", full_name, var_value);
-                // TODO: Handle variable scope
-                let node = VariableNode::new(var_value);
-                Ok(vec![Box::new(node) as Box<dyn WorldInfoNode>])
-            } else {
-                error!("Undefined variable encountered during resolution: {}", raw_tag);
-                Err(ParserError::UndefinedVariable(format!("Variable not found: {}", raw_tag)))
+            match registry.get_variable(&full_name) {
+                Ok(var) => {
+                    trace!("Successfully retrieved variable '{}'", full_name);
+                    Ok(vec![ Box::new(VariableNode::new(var)) as Box<dyn WorldInfoNode> ])
+                },
+                Err(e) => Err(e),
             }
         }
         AstNode::MacroIf { raw_tag, condition, then_branch, else_branch } => {
             debug!("Resolving MacroIf: {}", raw_tag);
-            match evaluate_expression(condition, registry) {
+            match evaluate_expression(condition, registry, entry_id) {
                 Ok(condition_result) => {
                     debug!("MacroIf condition evaluated to: {:?}", condition_result);
                     if is_truthy(&condition_result) {
                         debug!("Executing 'then' branch for MacroIf: {}", raw_tag);
-                        resolve_ast_nodes(then_branch, registry) // Recurse
+                        resolve_ast_nodes(then_branch, registry, entry_id) // Recurse
                     } else if let Some(else_nodes) = else_branch {
                         debug!("Executing 'else' branch for MacroIf: {}", raw_tag);
-                        resolve_ast_nodes(else_nodes, registry) // Recurse
+                        resolve_ast_nodes(else_nodes, registry, entry_id) // Recurse
                     } else {
                         debug!("Condition false, no 'else' branch for MacroIf: {}", raw_tag);
                         Ok(Vec::new()) // No nodes if condition false and no else
@@ -1016,13 +1017,14 @@ fn resolve_single_node<P: PluginBridge + Debug>(
 /// Recursively resolves AST nodes within properties into a serde_json::Value object.
 fn resolve_properties_to_json<P: PluginBridge + Debug>(
     properties: &[(String, AstNode)],
-    registry: &WorldInfoRegistry<P>,
+    registry: &ScopedRegistry<P>,
+    entry_id: &String
 ) -> Result<Value, ParserError> {
     trace!("Entering resolve_properties_to_json ({} properties)", properties.len());
     let mut map = Map::new();
     for (key, value_node) in properties {
         trace!("Resolving property key '{}', value type {:?}", key, value_node.variant_name());
-        let resolved_value = resolve_property_value_to_json(value_node, registry)?;
+        let resolved_value = resolve_property_value_to_json(value_node, registry, entry_id)?;
         trace!(" -> Resolved value for key '{}': {:?}", key, resolved_value);
         map.insert(key.clone(), resolved_value);
     }
@@ -1033,14 +1035,15 @@ fn resolve_properties_to_json<P: PluginBridge + Debug>(
 /// Resolves a single property value AST node into a serde_json::Value.
 fn resolve_property_value_to_json<P: PluginBridge + Debug>(
     node: &AstNode,
-    registry: &WorldInfoRegistry<P>,
+    registry: &ScopedRegistry<P>,
+    entry_id: &String
 ) -> Result<Value, ParserError> {
      trace!("Entering resolve_property_value_to_json for {:?}", node.variant_name());
      match node {
         // These nodes resolve by executing them and returning their string content
         AstNode::Processor { .. } | AstNode::MacroIf { .. } | AstNode::MacroForeach { .. } | AstNode::Text { .. } | AstNode::Trigger { .. } => {
             trace!("Resolving node {:?} within property to string content", node.variant_name());
-            let resolved_nodes = resolve_single_node(node, registry)?;
+            let resolved_nodes = resolve_single_node(node, registry, entry_id)?;
             let mut combined_content = String::new();
             for res_node in resolved_nodes {
                 match res_node.content() { // Assuming WorldInfoNode has a content() method
@@ -1055,18 +1058,10 @@ fn resolve_property_value_to_json<P: PluginBridge + Debug>(
             Ok(Value::String(combined_content))
         }
         // Variables resolve to their value in the registry
-         AstNode::Variable { scope, name, raw_tag } => {
+        AstNode::Variable { scope, name, raw_tag } => {
             let full_name = format!("{}:{}", scope, name);
             trace!("Resolving variable '{}' within property", full_name);
             registry.get_variable(&full_name)
-                .map(|v| {
-                    trace!(" -> Found variable value: {:?}", v);
-                    v // Clone the value
-                })
-                .ok_or_else(|| {
-                    error!("Undefined variable encountered during property resolution: {}", raw_tag);
-                    ParserError::UndefinedVariable(format!("Variable not found for property value: {}", raw_tag))
-                })
         }
         // Nested values might need re-parsing if they are strings containing tags
         AstNode::NestedValue(v) => {
@@ -1076,7 +1071,7 @@ fn resolve_property_value_to_json<P: PluginBridge + Debug>(
                 if s.contains("@[") || s.contains("<trigger") || s.contains("{{") || s.contains("{#") {
                     debug!("String literal contains tags, re-parsing/evaluating: {:?}", s);
                     // Re-parse the string content as if it were top-level input
-                    let inner_resolved_nodes = parse_entry_content(s, registry)?;
+                    let inner_resolved_nodes = parse_entry_content(s, registry, entry_id)?;
                     let mut combined_content = String::new();
                     for res_node in inner_resolved_nodes {
                         match res_node.content() {
@@ -1104,7 +1099,7 @@ fn resolve_property_value_to_json<P: PluginBridge + Debug>(
         AstNode::NestedArray(items) => {
             trace!("Resolving NestedArray within property ({} items)", items.len());
             let resolved_items = items.iter()
-                .map(|item_node| resolve_property_value_to_json(item_node, registry)) // Recurse
+                .map(|item_node| resolve_property_value_to_json(item_node, registry, entry_id)) // Recurse
                 .collect::<Result<Vec<_>, _>>()?;
             trace!(" -> Resolved array: {:?}", resolved_items);
             Ok(Value::Array(resolved_items))
@@ -1112,7 +1107,7 @@ fn resolve_property_value_to_json<P: PluginBridge + Debug>(
         // Objects resolve by resolving their properties (recursive call)
         AstNode::NestedObject(props) => {
              trace!("Resolving NestedObject within property ({} props)", props.len());
-            resolve_properties_to_json(props, registry) // Recurse
+            resolve_properties_to_json(props, registry, entry_id) // Recurse
         }
     }
 }
@@ -1134,7 +1129,8 @@ impl VariantName for Value {
 /// Evaluates an Expression AST node to a serde_json::Value.
 fn evaluate_expression<P: PluginBridge + Debug>(
     expr: &Expression,
-    registry: &WorldInfoRegistry<P>,
+    registry: &ScopedRegistry<P>,
+    entry_id: &String
 ) -> Result<Value, ParserError> {
     // Use debug! for expression evaluation steps
     debug!("EVAL EXPR: {:?}", expr);
@@ -1146,17 +1142,13 @@ fn evaluate_expression<P: PluginBridge + Debug>(
         Expression::Variable { scope, name, raw_tag } => {
             let full_name = format!("{}:{}", scope, name);
             debug!("  -> Variable Lookup: {}", full_name);
-            let result = registry.get_variable(&full_name)
-                .ok_or_else(|| {
-                    error!("Undefined variable during expression evaluation: {}", raw_tag);
-                    ParserError::UndefinedVariable(format!("Variable not found during evaluation: {}", raw_tag))
-                });
+            let result = registry.get_variable(&full_name)?;
             debug!("  -> Variable Result: {:?}", result);
-            result
+            Ok(result)
         }
         Expression::Processor { name, properties, raw_tag } => {
             debug!("  -> Processor Eval Start: {}", raw_tag);
-            let resolved_props = resolve_properties_to_json(properties, registry)?;
+            let resolved_props = resolve_properties_to_json(properties, registry, entry_id)?;
             debug!("  -> Processor Resolved Props: {:?}", resolved_props);
 
             let processor_instance = registry.instantiate_processor(name, &resolved_props)
@@ -1195,7 +1187,7 @@ fn evaluate_expression<P: PluginBridge + Debug>(
         }
         Expression::UnaryOperation { operator, operand } => {
             debug!("  -> Unary Op: {:?}", operator);
-            let operand_value = evaluate_expression(operand, registry)?; // Recurse
+            let operand_value = evaluate_expression(operand, registry, entry_id)?; // Recurse
             debug!("  -> Unary Operand Value: {:?}", operand_value);
             let result = match operator {
                 UnaryOperator::Not => Ok(Value::Bool(!is_truthy(&operand_value))),
@@ -1205,7 +1197,7 @@ fn evaluate_expression<P: PluginBridge + Debug>(
         }
         Expression::BinaryOperation { left, operator, right } => {
             debug!("  -> Binary Op: {:?}", operator);
-            let left_value = evaluate_expression(left, registry)?; // Recurse left
+            let left_value = evaluate_expression(left, registry, entry_id)?; // Recurse left
             debug!("  -> Binary Left Value: {:?}", left_value);
 
             // Short-circuit evaluation for || and &&
@@ -1215,7 +1207,7 @@ fn evaluate_expression<P: PluginBridge + Debug>(
                     debug!("  -> OR Left Truthy: {}", is_left_truthy);
                     if is_left_truthy { return Ok(left_value); } // Return the left value if truthy
                     debug!("  -> OR Evaluating Right");
-                    let right_value = evaluate_expression(right, registry)?; // Recurse right only if needed
+                    let right_value = evaluate_expression(right, registry, entry_id)?; // Recurse right only if needed
                     debug!("  -> OR Right Value: {:?}", right_value);
                     return Ok(right_value); // Return the right value
                 }
@@ -1224,7 +1216,7 @@ fn evaluate_expression<P: PluginBridge + Debug>(
                      debug!("  -> AND Left Truthy: {}", is_left_truthy);
                     if !is_left_truthy { return Ok(left_value); } // Return the left value if falsy
                      debug!("  -> AND Evaluating Right");
-                    let right_value = evaluate_expression(right, registry)?; // Recurse right only if needed
+                    let right_value = evaluate_expression(right, registry, entry_id)?; // Recurse right only if needed
                     debug!("  -> AND Right Value: {:?}", right_value);
                     return Ok(right_value); // Return the right value
                 }
@@ -1233,7 +1225,7 @@ fn evaluate_expression<P: PluginBridge + Debug>(
 
             // Evaluate right operand for non-short-circuiting ops
             debug!("  -> Binary Op Evaluating Right");
-            let right_value = evaluate_expression(right, registry)?; // Recurse right
+            let right_value = evaluate_expression(right, registry, entry_id)?; // Recurse right
             debug!("  -> Binary Right Value: {:?}", right_value);
             // Delegate actual operation
             evaluate_binary_operation(&left_value, *operator, &right_value)
