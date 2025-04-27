@@ -45,6 +45,9 @@ pub enum ParserError {
     #[error("Undefined variable: {0}")]
     UndefinedVariable(String),
 
+    #[error("Variable already exists: {0}")]
+    VariableAlreadyExists(String),
+
     #[error("Insufficient permissions: {0}")]
     InsufficientPermissions(String),
 

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::{Arc, RwLock}};
 use serde::de::DeserializeOwned;
-use crate::{ParserError, WorldInfoError, WorldInfoNode, WorldInfoProcessor};
+use crate::{ParserError, WorldInfoNode, WorldInfoProcessor};
 use std::fmt::Debug;
 
 pub struct WorldInfoRegistry<P: PluginBridge + 'static> {
@@ -10,7 +10,7 @@ pub struct WorldInfoRegistry<P: PluginBridge + 'static> {
 }
 
 pub struct ScopedRegistry<'a, P: PluginBridge + 'static> {
-    inner: &'a WorldInfoRegistry<P>,
+    inner: &'a mut WorldInfoRegistry<P>,
     allowed_scopes: &'a [String],
     scope_id: String
 }
@@ -23,29 +23,31 @@ impl <'a, P: PluginBridge + 'static> ScopedRegistry<'a, P> {
 
 pub trait VariableResolver {
     fn get_variable(&self, name: &str) -> Result<serde_json::Value, ParserError>;
+    fn insert_variable(&mut self, name: &str, value: serde_json::Value) -> Result<(), ParserError>;
+    fn update_variable(&mut self, name: &str, value: serde_json::Value) -> Result<(), ParserError>;
 
     /// Resolves implicit scopes
     /// 
-    /// # Example
+    /// ## Example
     /// 
     /// `entry:foo` -> `<scope_id>:foo`
     fn resolve_scope(&self, name: &str) -> Result<(String, String), ParserError>;
 }
 
 impl<'a, P: PluginBridge> VariableResolver for ScopedRegistry<'a, P> {
-    fn get_variable(&self, name: &str) -> Result<serde_json::Value, ParserError> {
-        let (scope, name) = self.resolve_scope(name)?;
-        let key = format!("{}:{}", scope, name);
-        if self.allowed_scopes.contains(&scope) {
-            if let Some(val) = self.inner.variables.get(&key){
-                return Ok(val.clone());
-            } else {
-                // Insufficient Permissions
-                return Err(ParserError::InsufficientPermissions(format!("Insufficient permissions to access variable {}", name)));
-            }
+    fn get_variable(&self, full_name: &str) -> Result<serde_json::Value, ParserError> {
+        let (scope, name) = self.resolve_scope(full_name)?;
+        if !self.allowed_scopes.contains(&scope) {
+            // 1) scope not allowed ⇒ permission error
+            return Err(ParserError::InsufficientPermissions(
+                format!("No access to scope `{}`", scope)
+            ));
         }
-        
-        Err(ParserError::UndefinedVariable(name.to_string()))
+        let key = format!("{}:{}", scope, name);
+        self.inner.variables
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| ParserError::UndefinedVariable(name))
     }
     
     fn resolve_scope(&self, name: &str) -> Result<(String, String), ParserError> {
@@ -54,6 +56,95 @@ impl<'a, P: PluginBridge> VariableResolver for ScopedRegistry<'a, P> {
         match scope {
             "entry" | "local" => Ok((self.scope_id.clone(), name.to_string())),
             _ => Ok((scope.to_string(), name.to_string()))
+        }
+    }
+    
+    fn insert_variable(&mut self, full_name: &str, value: serde_json::Value) -> Result<(), ParserError> {
+        let (scope, name) = self.resolve_scope(full_name)?;
+        let key = format!("{}:{}", scope, name);
+
+        match scope.as_str() {
+            "global" => {
+                // bypass the resolver‐checks and insert raw key
+                if self.inner.variables.contains_key(&key) {
+                    Err(ParserError::VariableAlreadyExists(name))
+                } else {
+                    self.inner.register_variable(key, value);
+                    Ok(())
+                }
+            }
+            _ => {
+                if !self.allowed_scopes.contains(&scope) {
+                    Err(ParserError::InsufficientPermissions(
+                        format!("No access to scope `{}`", scope)
+                    ))
+                } else if self.inner.variables.contains_key(&key) {
+                    Err(ParserError::VariableAlreadyExists(name))
+                } else {
+                    self.inner.variables.insert(key, value);
+                    Ok(())
+                }
+            }
+        }
+    }
+    
+    fn update_variable(&mut self, full_name: &str, value: serde_json::Value) -> Result<(), ParserError> {
+        let (scope, name) = self.resolve_scope(full_name)?;
+        if !self.allowed_scopes.contains(&scope) && scope != "global" {
+            return Err(ParserError::InsufficientPermissions(
+                format!("No access to scope `{}`", scope)
+            ));
+        }
+
+        let key = format!("{}:{}", scope, name);
+        if let Some(slot) = self.inner.variables.get_mut(&key) {
+            *slot = value;
+            Ok(())
+        } else {
+            Err(ParserError::UndefinedVariable(name))
+        }
+    }
+}
+
+impl<P: PluginBridge + 'static> VariableResolver for WorldInfoRegistry<P>{
+    fn get_variable(&self, name: &str) -> Result<serde_json::Value, ParserError> {
+        let (scope, name) = self.resolve_scope(name)?;
+        let key = format!("{}:{}", scope, name);
+        if let Some(val) = self.variables.get(&key){
+            return Ok(val.clone());
+        }
+        Err(ParserError::UndefinedVariable(name.to_string()))
+    }
+
+    fn insert_variable(&mut self, name: &str, value: serde_json::Value) -> Result<(), ParserError> {
+        let (scope, name) = self.resolve_scope(name)?;
+        let key = format!("{}:{}", scope, name);
+
+        if let Some(_) = self.variables.get_mut(&key) {
+            Err(ParserError::VariableAlreadyExists(name.to_string()))
+        } else {
+            self.variables.insert(key, value);
+            Ok(())
+        }
+    }
+
+    fn update_variable(&mut self, name: &str, value: serde_json::Value) -> Result<(), ParserError> {
+        let (scope, name) = self.resolve_scope(name)?;
+        let key = format!("{}:{}", scope, name);
+        if let Some(val) = self.variables.get_mut(&key) {
+            *val = value;
+            Ok(())
+        } else {
+            Err(ParserError::UndefinedVariable(name.to_string()))
+        }
+    }
+
+    fn resolve_scope(&self, name: &str) -> Result<(String, String), ParserError> {
+        let (scope, name) = name.split_once(':').ok_or(ParserError::UndefinedVariable(name.to_string()))?;
+
+        match scope {
+            "global" => Ok(("global".to_string(), name.to_string())),
+            _ => Err(ParserError::InsufficientPermissions(format!("WorldInfo cannot access scoped variable: {}", name)))
         }
     }
 }
@@ -84,21 +175,14 @@ impl<P: PluginBridge + 'static> WorldInfoRegistry<P> {
         &self.plugin_bridge
     }
 
+    /// Used for initial variable registration
+    /// 
+    /// This method bypasses scope checks
     pub fn register_variable(&mut self, var: String, value: serde_json::Value) {
         self.variables.insert(var, value);
     }
 
-    pub fn update_variable(&mut self, name: &str, value: serde_json::Value) {
-        if let Some(var) = self.variables.get_mut(name) {
-            *var = value;
-        }
-    }
-
-    pub fn get_variable(&self, name: &str) -> Option<serde_json::Value> {
-        self.variables.get(name).cloned()
-    }
-
-    pub(crate) fn scoped_registry<'a>(&'a self, allowed_scopes: &'a [String], scope_id: String) -> ScopedRegistry<'a, P> {
+    pub(crate) fn scoped_registry<'a>(&'a mut self, allowed_scopes: &'a [String], scope_id: String) -> ScopedRegistry<'a, P> {
         ScopedRegistry { inner: self, allowed_scopes, scope_id }
     }
     

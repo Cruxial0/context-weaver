@@ -955,7 +955,7 @@ fn resolve_single_node<P: PluginBridge + Debug>(
                 }
             }
         }
-        AstNode::Variable { raw_tag, scope, name } => {
+        AstNode::Variable { scope, name, .. } => {
             let full_name = format!("{}:{}", scope, name);
             trace!("Resolving Variable node '{}'", full_name);
             match registry.get_variable(&full_name) {
@@ -1058,7 +1058,7 @@ fn resolve_property_value_to_json<P: PluginBridge + Debug>(
             Ok(Value::String(combined_content))
         }
         // Variables resolve to their value in the registry
-        AstNode::Variable { scope, name, raw_tag } => {
+        AstNode::Variable { scope, name, .. } => {
             let full_name = format!("{}:{}", scope, name);
             trace!("Resolving variable '{}' within property", full_name);
             registry.get_variable(&full_name)
@@ -1139,7 +1139,7 @@ fn evaluate_expression<P: PluginBridge + Debug>(
             debug!("  -> Literal: {:?}", value);
             Ok(value.clone())
         },
-        Expression::Variable { scope, name, raw_tag } => {
+        Expression::Variable { scope, name, .. } => {
             let full_name = format!("{}:{}", scope, name);
             debug!("  -> Variable Lookup: {}", full_name);
             let result = registry.get_variable(&full_name)?;
