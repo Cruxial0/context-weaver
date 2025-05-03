@@ -1,7 +1,10 @@
 // Grammar for parsing text with embedded processors, triggers, variables, and macros.
 
 // --- Entry Point & Basic Structure ---
-input = { SOI ~ (macro_tag | processor_tag_content | trigger_tag_content | variable_tag_content | text)* ~ EOI }
+// Reverted to original input rule
+input = { SOI ~ (macro_tag | processor | trigger | variable | text | WHITESPACE)* ~ EOI }
+cond_input = {SOI ~ condition* ~ EOI}
+
 
 // --- Whitespace and Comments (ignored in most places via `_`) ---
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
@@ -9,54 +12,56 @@ WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 // --- Text Node ---
 text = @{ (!("@[" | "<trigger" | "{{" | "{#") ~ ANY)+ }
 
-// --- Processor Tag: @[name(props)] ---
-processor_tag_content = { processor_start ~ processor_name ~ ( "(" ~ properties? ~ ")" )? ~ processor_end }
+// --- Unified Processor Tag ---
+// Make non-atomic so AST builder can see inner parts
+processor = { processor_start ~ processor_name ~ ( "(" ~ properties? ~ ")" )? ~ processor_end }
 processor_start = @{ "@[" }
 processor_name = @{ identifier ~ ("." ~ identifier)* }
 processor_end = @{ "]" }
-// Atomic rule for use inside properties/expressions
-processor_tag = @{ processor_start ~ processor_name ~ ( "(" ~ properties? ~ ")" )? ~ processor_end }
 
-
-// --- Trigger Tag: <trigger id=X> ---
-trigger_tag_content = { trigger_start ~ trigger_attributes? ~ trigger_end }
+// --- Unified Trigger Tag ---
+// Make non-atomic
+trigger = { trigger_start ~ trigger_attributes? ~ trigger_end }
 trigger_start = @{ "<trigger" }
 trigger_attributes = { WHITESPACE+ ~ trigger_attribute ~ (WHITESPACE+ ~ trigger_attribute)* ~ WHITESPACE* }
 trigger_attribute = { trigger_key ~ "=" ~ trigger_value }
 trigger_key = @{ "id" }
 trigger_value = _{ quoted_string }
 trigger_end = @{ ">" }
-// trigger_tag = @{ trigger_start ~ trigger_attributes? ~ trigger_end } // Not currently needed
 
-
-// --- Scoped Variable: {{scope:name}} ---
-variable_tag_content = { variable_start ~ scope ~ variable_separator ~ name ~ variable_end }
+// --- Unified Scoped Variable ---
+// Make non-atomic
+variable = { variable_start ~ scope ~ variable_separator ~ name ~ variable_end }
 variable_start = @{ "{{" }
 scope = @{ identifier }
 variable_separator = @{ ":" }
 name = @{ identifier }
 variable_end = @{ "}}" }
-// Atomic rule for use inside properties/expressions and expressions
-variable = @{ variable_start ~ scope ~ variable_separator ~ name ~ variable_end }
 
 
 // --- Macros: {# if ... #}, {# foreach ... #} ---
-macro_tag = { macro_if | macro_foreach }
+macro_tag = { ( macro_foreach | macro_if ) } // Keep this choice
 
 // If Macro: {# if condition #} ... {# else #} ... {# endif #}
 macro_if = { macro_if_start ~ expression ~ macro_tag_end ~ inner_nodes ~ macro_else? ~ macro_endif }
-macro_if_start = @{ "{# if" ~ WHITESPACE+ }
+macro_if_start = @{ macro_tag_start ~ "if" ~ WHITESPACE+ }
 macro_else = { macro_else_tag ~ inner_nodes }
 macro_else_tag = @{ "{# else #}" }
 macro_endif = @{ "{# endif #}" }
 
 // Foreach Macro: {# foreach item in collection #} ... {# endforeach #}
-macro_foreach = { macro_foreach_start ~ identifier ~ WHITESPACE+ ~ "in" ~ WHITESPACE+ ~ expression ~ macro_tag_end ~ inner_nodes ~ macro_endforeach }
-macro_foreach_start = @{ "{# foreach" ~ WHITESPACE+ }
+macro_foreach = { macro_foreach_start ~ identifier ~ WHITESPACE* ~ "in" ~ WHITESPACE* ~ expression ~ macro_tag_end ~ inner_nodes ~ macro_endforeach }
+macro_foreach_start = @{ macro_tag_start ~ "foreach" ~ WHITESPACE+ }
 macro_endforeach = @{ "{# endforeach #}" }
 
+macro_tag_start = @{ "{#" ~ WHITESPACE* }
 macro_tag_end = @{ WHITESPACE* ~ "#}" }
-inner_nodes = { (macro_tag | processor_tag_content | trigger_tag_content | variable_tag_content | text)* }
+
+// Add a rule for iterator references in foreach loops
+iterator_reference = { "{{" ~ identifier ~ "}}" }
+
+// Update inner_nodes to use the unified rules
+inner_nodes = { (macro_tag | processor | trigger | variable | iterator_reference | text)* }
 
 
 // --- Expressions (Enhanced for Arithmetic, Comparisons, and Logic) ---
@@ -74,7 +79,8 @@ multiplication_division = { unary_prefix ~ ( (mul_op | div_op) ~ unary_prefix )*
 unary_prefix = { not_op ~ unary_prefix | term } // Unary prefix has high precedence
 
 // Basic term: literals, variables, processors, or grouped expressions
-term = _{ literal | variable | processor_tag | "(" ~ expression ~ ")" }
+// Restore silent whitespace '_'
+term = _{ literal | variable | processor | "(" ~ expression ~ ")" }
 
 // Operator Rules
 comp_op = @{ "==" | "!=" | "<=" | ">=" | "<" | ">" }
@@ -90,12 +96,15 @@ not_op = @{ "!" }
 properties = { property ~ (WHITESPACE* ~ "," ~ WHITESPACE* ~ property)* ~ WHITESPACE* }
 property = { property_key ~ WHITESPACE* ~ ":" ~ WHITESPACE* ~ property_value }
 property_key = @{ identifier | quoted_string }
+// Update property_value to use the unified rules
+// Restore silent whitespace '_'
 property_value = _{
-    processor_tag // Atomic processor tag @[...]
-    | variable    // Atomic variable tag {{...}}
+    processor // Use unified processor rule
+    | variable  // Use unified variable rule
+    | iterator_reference
     | object
     | array
-    | literal     // Allow simple literals directly
+    | literal   // Allow simple literals directly
 }
 
 // --- Literals ---
@@ -106,7 +115,7 @@ boolean = @{ "true" | "false" }
 null = @{ "null" }
 
 // --- Reusable Primitives ---
-identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")*? }
 quoted_string = _{ "\"" ~ string_content? ~ "\"" }
 string_content = @{ (escape | !("\"" | "\\") ~ ANY)+ }
 escape = { "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t" | "u" ~ ASCII_HEX_DIGIT{4}) }

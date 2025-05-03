@@ -194,6 +194,36 @@ mod tests {
     }
 
     #[test]
+    fn test_foreach_macro() {
+        use crate::core::processors::{WorldInfoRegistry, RngProcessorFactory};
+        use crate::{WorldInfo, EntryFactory, WorldInfoFactory};
+        use std::sync::Arc;
+
+        init();
+
+        let mut registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
+        registry.register_processor("weaver.core.rng", Box::new(RngProcessorFactory));
+        registry.register_variable("global:array".to_string(), vec![10, 15, 20, 25, 30].into());
+
+        let input = "
+        {# foreach item in {{global:array}} #}
+            The item is @[weaver.core.rng(min: 0, max: {{item}})]!\n
+        {# endforeach #}
+        ";
+
+        let mut worldinfo = WorldInfo::new(Box::new(registry));
+        let entry = worldinfo.new_entry("test", 0);
+
+        entry.set_text(&input);
+
+        let evaluated_result = worldinfo.evaluate().unwrap();
+        let result = format!("The item is 10!\nThe item is 15!\nThe item is 20!\nThe item is 25!\nThe item is 30!");
+        println!("Evaluated result: {}", evaluated_result);
+
+        assert_eq!(evaluated_result, result);
+    }
+
+    #[test]
     fn test_invalid_processor() {
         use crate::{ParserError, WorldInfoError};
         use crate::core::processors::WorldInfoRegistry;

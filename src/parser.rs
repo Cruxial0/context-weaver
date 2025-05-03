@@ -10,6 +10,7 @@ use pest::Parser;
 use pest_derive::Parser;
 use pest::pratt_parser::{Op, PrattParser};
 use serde_json::{json, Map, Value};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::iter::Peekable;
 use lazy_static::lazy_static;
@@ -49,6 +50,7 @@ pub enum AstNode {
     Variable { scope: String, name: String, raw_tag: String },
     MacroIf { condition: Box<Expression>, then_branch: Vec<AstNode>, else_branch: Option<Vec<AstNode>>, raw_tag: String },
     MacroForeach { item_variable: String, collection: Box<Expression>, body: Vec<AstNode>, raw_tag: String },
+    IteratorReference { name: String, raw_tag: String },
     NestedValue(Value),
     NestedArray(Vec<AstNode>),
     NestedObject(Vec<(String, AstNode)>),
@@ -109,7 +111,7 @@ fn parse_expression_pratt(pairs: Pairs<Rule>) -> Result<Expression, ParserError>
                     }
                 }
             }
-            Rule::processor_tag => {
+            Rule::processor => {
                 match parse_atomic_processor(primary.clone())? {
                     AstNode::Processor { name, properties, raw_tag } => Ok(Expression::Processor { name, properties, raw_tag }),
                      other => {
@@ -220,7 +222,7 @@ pub fn parse_entry_content<P: PluginBridge + Debug>(
     let ast = build_ast_from_pairs::<P>(&mut inner_pairs)?;
     debug!("Built AST: {:?}", ast); // Debug level for AST structure
 
-    let resolved = resolve_ast_nodes(&ast, registry, entry_id)?;
+    let resolved = resolve_ast_nodes(&ast, registry, entry_id, None)?;
     debug!("Resolved Nodes (count: {}): {:?}", resolved.len(), resolved.iter().map(|n| n.name()).collect::<Vec<_>>());
     Ok(resolved)
 }
@@ -243,17 +245,17 @@ fn build_ast_from_pairs<'i, P: PluginBridge + Debug>(
                 trace!("AST build: Text node: {:?}", text_pair.as_str());
                 nodes.push(AstNode::Text(text_pair.as_str().to_string()));
             }
-            Rule::processor_tag_content => {
+            Rule::processor => {
                 let content_pair = pairs.next().unwrap();
                 trace!("AST build: Parsing processor content: {:?}", content_pair.as_str());
                 nodes.push(parse_processor_content::<P>(content_pair)?);
             }
-            Rule::trigger_tag_content => {
+            Rule::trigger => {
                 let content_pair = pairs.next().unwrap();
                 trace!("AST build: Parsing trigger content: {:?}", content_pair.as_str());
                 nodes.push(parse_trigger_content::<P>(content_pair)?);
             }
-            Rule::variable_tag_content => {
+            Rule::variable => {
                 let content_pair = pairs.next().unwrap();
                 trace!("AST build: Parsing variable content: {:?}", content_pair.as_str());
                 nodes.push(parse_variable_content::<P>(content_pair)?);
@@ -275,6 +277,11 @@ fn build_ast_from_pairs<'i, P: PluginBridge + Debug>(
                     }
                 }
             }
+            Rule::iterator_reference => {
+                let content_pair = pairs.next().unwrap();
+                trace!("AST build: Parsing iterator reference content: {:?}", content_pair.as_str());
+                nodes.push(parse_iterator_reference_content::<P>(content_pair)?);
+            }
             Rule::EOI => {
                 trace!("AST build: Reached EOI");
                 pairs.next();
@@ -289,7 +296,7 @@ fn build_ast_from_pairs<'i, P: PluginBridge + Debug>(
                 // Use warn! here if it's potentially recoverable or just unexpected structure
                 // Use error! if it signifies a definite parsing failure
                 error!("Unexpected rule during AST building: {:?} ({:?})", r, unexpected_pair.as_str());
-                if matches!(r, Rule::processor_tag_content | Rule::trigger_tag_content | Rule::variable_tag_content) {
+                if matches!(r, Rule::processor | Rule::trigger | Rule::variable) {
                     error!("Critical Error: Content rule {:?} encountered unexpectedly in main loop.", r);
                 }
                 return Err(ParserError::InvalidRule(r));
@@ -305,7 +312,7 @@ fn parse_processor_content<'i, P: PluginBridge + Debug>(
     pair: Pair<'i, Rule>,
 ) -> Result<AstNode, ParserError> {
     trace!("Parsing processor content: {:?}", pair.as_str());
-    if pair.as_rule() != Rule::processor_tag_content {
+    if pair.as_rule() != Rule::processor {
         error!("Expected processor_tag_content, got {:?}", pair.as_rule());
         return Err(ParserError::Processing(format!("Expected processor_tag_content, got {:?}", pair.as_rule())));
     }
@@ -347,7 +354,7 @@ fn parse_trigger_content<'i, P: PluginBridge + Debug>(
     pair: Pair<'i, Rule>,
 ) -> Result<AstNode, ParserError> {
     trace!("Parsing trigger content: {:?}", pair.as_str());
-    if pair.as_rule() != Rule::trigger_tag_content {
+    if pair.as_rule() != Rule::trigger {
         error!("Expected trigger_tag_content, got {:?}", pair.as_rule());
         return Err(ParserError::Processing(format!("Expected trigger_tag_content, got {:?}", pair.as_rule())));
     }
@@ -404,7 +411,7 @@ fn parse_variable_content<'i, P: PluginBridge + Debug>(
     pair: Pair<'i, Rule>,
 ) -> Result<AstNode, ParserError> {
     trace!("Parsing variable content: {:?}", pair.as_str());
-    if pair.as_rule() != Rule::variable_tag_content {
+    if pair.as_rule() != Rule::variable {
         error!("Expected variable_tag_content, got {:?}", pair.as_rule());
         return Err(ParserError::Processing(format!("Expected variable_tag_content, got {:?}", pair.as_rule())));
     }
@@ -590,6 +597,33 @@ fn parse_macro_foreach<P: PluginBridge + Debug>(pair: Pair<Rule>) -> Result<AstN
     })
 }
 
+/// Parses an iterator reference within a loop macro.
+fn parse_iterator_reference_content<'i, P: PluginBridge + Debug>(
+    pair: Pair<'i, Rule>,
+) -> Result<AstNode, ParserError> {
+    trace!("Parsing iterator reference content: {:?}", pair.as_str());
+    if pair.as_rule() != Rule::iterator_reference {
+        error!("Expected iterator_reference, got {:?}", pair.as_rule());
+        return Err(ParserError::Processing(format!("Expected iterator_reference, got {:?}", pair.as_rule())));
+    }
+    let raw_tag_string = pair.as_str().to_string();
+
+    // Extract the identifier between {{ and }}
+    let name = pair.into_inner() // Go inside iterator_reference
+        .next() // Should be the identifier rule
+        .ok_or_else(|| ParserError::Processing(format!("Iterator reference missing identifier: {}", raw_tag_string)))?
+        .as_str()
+        .to_string();
+
+    if name.is_empty() {
+        error!("Empty identifier in iterator reference: {}", raw_tag_string);
+        return Err(ParserError::Processing(format!("Empty identifier in iterator reference: {}", raw_tag_string)));
+    }
+
+    trace!("Parsed iterator reference: name='{}'", name);
+    Ok(AstNode::IteratorReference { name, raw_tag: raw_tag_string })
+}
+
 /// Parses an *atomic* variable pair.
 fn parse_atomic_variable(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
     trace!("Parsing atomic variable: {:?}", pair.as_str());
@@ -616,10 +650,21 @@ fn parse_atomic_variable(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
     }
 }
 
+fn parse_atomic_iterator_reference(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
+    trace!("Parsing atomic iterator reference: {:?}", pair.as_str());
+    if pair.as_rule() != Rule::iterator_reference {
+        error!("Expected atomic iterator_reference rule, got {:?}", pair.as_rule());
+        return Err(ParserError::Processing(format!("Expected atomic iterator_reference rule, got {:?}", pair.as_rule())));
+    }
+    let raw_tag = pair.as_str().to_string();
+    let content = raw_tag.trim_start_matches("{{").trim_end_matches("}}");
+    Ok(AstNode::IteratorReference { name: content.to_string(), raw_tag })
+}
+
 /// Parses an *atomic* processor tag pair.
 fn parse_atomic_processor(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
     trace!("Parsing atomic processor: {:?}", pair.as_str());
-    if pair.as_rule() != Rule::processor_tag {
+    if pair.as_rule() != Rule::processor {
         error!("Expected atomic processor_tag rule, got {:?}", pair.as_rule());
         return Err(ParserError::Processing(format!("Expected atomic processor_tag rule, got {:?}", pair.as_rule())));
     }
@@ -826,7 +871,7 @@ fn parse_properties(pair: Pair<Rule>) -> Result<Vec<(String, AstNode)>, ParserEr
 fn parse_property_value(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
     trace!("Parsing property value rule {:?}: {:?}", pair.as_rule(), pair.as_str());
     match pair.as_rule() {
-        Rule::processor_tag => parse_atomic_processor(pair),
+        Rule::processor => parse_atomic_processor(pair),
         Rule::variable => parse_atomic_variable(pair),
         Rule::object => {
             trace!("Parsing object property value");
@@ -866,6 +911,10 @@ fn parse_property_value(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
             trace!("Descending into actual literal from property value literal rule");
             parse_literal(literal_pair)
         }
+        Rule::iterator_reference => {
+            trace!("Descending into actual iterator_reference from property value iterator_reference rule");
+            parse_atomic_iterator_reference(pair)
+        }
         r => {
             error!("Unexpected rule type encountered during property value parsing: {:?} ({:?})", r, pair.as_str());
             Err(ParserError::InvalidRule(r))
@@ -880,13 +929,14 @@ fn parse_property_value(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
 fn resolve_ast_nodes<P: PluginBridge + Debug>(
     nodes: &[AstNode],
     registry: &ScopedRegistry<P>,
-    entry_id: &String
+    entry_id: &String,
+    loop_context: Option<&HashMap<String, Value>>,
 ) -> Result<Vec<Box<dyn WorldInfoNode>>, ParserError> {
     trace!("Entering resolve_ast_nodes ({} nodes)", nodes.len());
     let mut resolved_nodes = Vec::new();
     for (i, node) in nodes.iter().enumerate() {
         trace!("Resolving AST node {}/{}: {:?}", i + 1, nodes.len(), node.variant_name()); // Use a helper trait/method if needed
-        match resolve_single_node(node, registry, entry_id) {
+        match resolve_single_node(node, registry, entry_id, loop_context) {
             Ok(resolved_node_list) => {
                 trace!(" -> Resolved into {} WorldInfoNode(s)", resolved_node_list.len());
                 resolved_nodes.extend(resolved_node_list)
@@ -912,6 +962,7 @@ impl AstNode {
             AstNode::Variable { .. } => "Variable",
             AstNode::MacroIf { .. } => "MacroIf",
             AstNode::MacroForeach { .. } => "MacroForeach",
+            AstNode::IteratorReference { .. } => "IteratorReference",
             AstNode::NestedValue(_) => "NestedValue",
             AstNode::NestedArray(_) => "NestedArray",
             AstNode::NestedObject(_) => "NestedObject",
@@ -924,7 +975,8 @@ impl AstNode {
 fn resolve_single_node<P: PluginBridge + Debug>(
     node: &AstNode,
     registry: &ScopedRegistry<P>,
-    entry_id: &String
+    entry_id: &String,
+    loop_context: Option<&HashMap<String, Value>>
 ) -> Result<Vec<Box<dyn WorldInfoNode>>, ParserError> {
     trace!("Entering resolve_single_node for {:?}", node.variant_name());
     match node {
@@ -940,7 +992,7 @@ fn resolve_single_node<P: PluginBridge + Debug>(
         }
         AstNode::Processor { name, properties, raw_tag } => {
             trace!("Resolving Processor node '{}'", name);
-            let resolved_props = resolve_properties_to_json(properties, registry, entry_id)?;
+            let resolved_props = resolve_properties_to_json(properties, registry, entry_id, loop_context)?;
             debug!("Resolved properties for processor '{}': {:?}", name, resolved_props);
             match registry.instantiate_processor(name, &resolved_props) {
                 Some(processor) => {
@@ -958,7 +1010,7 @@ fn resolve_single_node<P: PluginBridge + Debug>(
         AstNode::Variable { scope, name, .. } => {
             let full_name = format!("{}:{}", scope, name);
             trace!("Resolving Variable node '{}'", full_name);
-            match registry.get_variable(&full_name) {
+            match registry.get_variable(&full_name, loop_context) {
                 Ok(var) => {
                     trace!("Successfully retrieved variable '{}'", full_name);
                     Ok(vec![ Box::new(VariableNode::new(var)) as Box<dyn WorldInfoNode> ])
@@ -968,15 +1020,15 @@ fn resolve_single_node<P: PluginBridge + Debug>(
         }
         AstNode::MacroIf { raw_tag, condition, then_branch, else_branch } => {
             debug!("Resolving MacroIf: {}", raw_tag);
-            match evaluate_expression(condition, registry, entry_id) {
+            match evaluate_expression(condition, registry, entry_id, loop_context) {
                 Ok(condition_result) => {
                     debug!("MacroIf condition evaluated to: {:?}", condition_result);
                     if is_truthy(&condition_result) {
                         debug!("Executing 'then' branch for MacroIf: {}", raw_tag);
-                        resolve_ast_nodes(then_branch, registry, entry_id) // Recurse
+                        resolve_ast_nodes(then_branch, registry, entry_id, loop_context) // Recurse
                     } else if let Some(else_nodes) = else_branch {
                         debug!("Executing 'else' branch for MacroIf: {}", raw_tag);
-                        resolve_ast_nodes(else_nodes, registry, entry_id) // Recurse
+                        resolve_ast_nodes(else_nodes, registry, entry_id, loop_context) // Recurse
                     } else {
                         debug!("Condition false, no 'else' branch for MacroIf: {}", raw_tag);
                         Ok(Vec::new()) // No nodes if condition false and no else
@@ -989,22 +1041,87 @@ fn resolve_single_node<P: PluginBridge + Debug>(
             }
         }
         AstNode::MacroForeach { raw_tag, item_variable, collection, body } => {
-            // TODO: Implement Foreach Resolution
-            error!("Foreach macro resolution not implemented yet: {}", raw_tag);
-            Err(ParserError::Evaluation(format!("Foreach macro evaluation not implemented: {}", raw_tag)))
-            // Implementation Sketch:
-            // 1. Evaluate `collection` expression -> Result<Value, ParserError>
-            // 2. Check if result is Value::Array or Value::Object
-            // 3. If Array: Iterate items
-            //    - For each item:
-            //      - Create a temporary scope/context for the loop iteration
-            //      - Add `item_variable` -> current item Value to the temp scope
-            //      - Resolve `body` nodes using the registry *and* the temp scope
-            //      - Append resolved nodes to the result Vec
-            // 4. If Object: Iterate key-value pairs (decide if you iterate keys, values, or pairs)
-            //    - Similar logic as array, potentially setting item_variable to key or value or a small object.
-            // 5. Handle errors (collection not iterable, resolution errors in body)
-            // 6. Return combined resolved nodes
+            debug!("Resolving MacroForeach: {}", raw_tag);
+            trace!("Item variable: '{}', Body nodes: {}", item_variable, body.len());
+
+            // 1. Evaluate the collection expression, passing the current loop context
+            let collection_value = match evaluate_expression(collection, registry, entry_id, loop_context) {
+                Ok(val) => val,
+                Err(e) => {
+                    error!("Error evaluating collection expression for foreach {}: {}", raw_tag, e);
+                    return Err(e);
+                }
+            };
+            debug!("Foreach collection evaluated to: {:?}", collection_value.variant_name());
+            trace!("Foreach collection value: {:?}", collection_value);
+
+            // 2. Check if the result is iterable (currently only Array supported)
+            if let Value::Array(items) = collection_value {
+                let mut all_resolved_nodes = Vec::new();
+                let item_count = items.len();
+                debug!("Iterating over collection array with {} items for foreach {}", item_count, raw_tag);
+
+                // 3. Iterate and resolve body for each item
+                for (index, current_item) in items.into_iter().enumerate() {
+                    trace!("Foreach loop iteration {}/{}, item_variable='{}', item={:?}", index + 1, item_count, item_variable, current_item);
+
+                    // Create a *new* context for this iteration.
+                    // It could potentially inherit from the outer loop_context if needed,
+                    // but for simple foreach, just the current item is usually sufficient.
+                    let mut current_iteration_context = HashMap::new();
+                    current_iteration_context.insert(item_variable.clone(), current_item);
+
+                    // 4. Resolve the body nodes with the new context for this iteration
+                    match resolve_ast_nodes(body, registry, entry_id, Some(&current_iteration_context)) {
+                        Ok(resolved_body_nodes) => {
+                            trace!(" -> Resolved body for iteration {} into {} nodes", index + 1, resolved_body_nodes.len());
+                            all_resolved_nodes.extend(resolved_body_nodes);
+                        }
+                        Err(e) => {
+                            error!("Error resolving body in foreach {} iteration {}: {}", raw_tag, index + 1, e);
+                            // Decide whether to stop or continue on error. Stopping is safer.
+                            return Err(e);
+                        }
+                    }
+                }
+                debug!("Finished foreach {} loop, produced {} total nodes", raw_tag, all_resolved_nodes.len());
+                Ok(all_resolved_nodes)
+
+            }
+            // TODO: Add support for iterating over Objects if needed
+            // else if let Value::Object(obj) = collection_value { ... }
+            else {
+                error!("Collection expression for foreach {} did not evaluate to an Array (found {:?}). Cannot iterate.", raw_tag, collection_value.variant_name());
+                Err(ParserError::Evaluation(format!(
+                    "Cannot iterate over collection in foreach {}: Expected Array, got {:?}",
+                    raw_tag, collection_value.variant_name()
+                )))
+            }
+        }
+        AstNode::IteratorReference { name, raw_tag } => {
+            debug!("Resolving iterator reference: {}", raw_tag);
+            match loop_context {
+                Some(context) => {
+                    match context.get(name) {
+                        Some(value) => {
+                            trace!("Found iterator variable '{}' in loop context", name);
+                            // Treat it like a resolved variable
+                            Ok(vec![Box::new(VariableNode::new(value.clone())) as Box<dyn WorldInfoNode>])
+                        }
+                        None => {
+                            error!("Iterator variable '{}' not found in loop context for {}", name, raw_tag);
+                            Err(ParserError::UndefinedVariable(name.clone())) // Use UndefinedVariable error
+                        }
+                    }
+                }
+                None => {
+                    error!("Iterator reference {} used outside of a foreach loop context", raw_tag);
+                    Err(ParserError::Processing(format!(
+                        "Iterator reference {} used outside of a foreach loop",
+                        raw_tag
+                    )))
+                }
+            }
         }
         // These should not be present at the top level during final resolution
         AstNode::NestedValue(_) | AstNode::NestedArray(_) | AstNode::NestedObject(_) => {
@@ -1018,13 +1135,14 @@ fn resolve_single_node<P: PluginBridge + Debug>(
 fn resolve_properties_to_json<P: PluginBridge + Debug>(
     properties: &[(String, AstNode)],
     registry: &ScopedRegistry<P>,
-    entry_id: &String
+    entry_id: &String,
+    loop_context: Option<&HashMap<String, Value>>,
 ) -> Result<Value, ParserError> {
     trace!("Entering resolve_properties_to_json ({} properties)", properties.len());
     let mut map = Map::new();
     for (key, value_node) in properties {
         trace!("Resolving property key '{}', value type {:?}", key, value_node.variant_name());
-        let resolved_value = resolve_property_value_to_json(value_node, registry, entry_id)?;
+        let resolved_value = resolve_property_value_to_json(value_node, registry, entry_id, loop_context)?;
         trace!(" -> Resolved value for key '{}': {:?}", key, resolved_value);
         map.insert(key.clone(), resolved_value);
     }
@@ -1036,14 +1154,15 @@ fn resolve_properties_to_json<P: PluginBridge + Debug>(
 fn resolve_property_value_to_json<P: PluginBridge + Debug>(
     node: &AstNode,
     registry: &ScopedRegistry<P>,
-    entry_id: &String
+    entry_id: &String,
+    loop_context: Option<&HashMap<String, Value>>,
 ) -> Result<Value, ParserError> {
     trace!("Entering resolve_property_value_to_json for {:?}", node.variant_name());
     match node {
         // These nodes resolve by executing them and returning their string content
         AstNode::Processor { .. } | AstNode::MacroIf { .. } | AstNode::MacroForeach { .. } | AstNode::Text { .. } | AstNode::Trigger { .. } => {
             trace!("Resolving node {:?} within property to string content", node.variant_name());
-            let resolved_nodes = resolve_single_node(node, registry, entry_id)?;
+            let resolved_nodes = resolve_single_node(node, registry, entry_id, loop_context)?;
             let mut combined_content = String::new();
             for res_node in resolved_nodes {
                 match res_node.content() { // Assuming WorldInfoNode has a content() method
@@ -1061,7 +1180,11 @@ fn resolve_property_value_to_json<P: PluginBridge + Debug>(
         AstNode::Variable { scope, name, .. } => {
             let full_name = format!("{}:{}", scope, name);
             trace!("Resolving variable '{}' within property", full_name);
-            registry.get_variable(&full_name)
+            registry.get_variable(&full_name, loop_context)
+        }
+        AstNode::IteratorReference { name, .. } => {
+            trace!("Resolving iterator reference '{}' within property", name);
+            registry.get_variable(name, loop_context)
         }
         // Nested values might need re-parsing if they are strings containing tags
         AstNode::NestedValue(v) => {
@@ -1095,11 +1218,35 @@ fn resolve_property_value_to_json<P: PluginBridge + Debug>(
                 Ok(v.clone())
             }
         }
+        AstNode::IteratorReference { name, raw_tag } => {
+            debug!("Resolving iterator reference {} within property", raw_tag);
+            match loop_context {
+                Some(context) => {
+                    match context.get(name) {
+                        Some(value) => {
+                            trace!("Found iterator variable '{}' in loop context", name);
+                            Ok(value.clone()) // Return the JSON value directly
+                        }
+                        None => {
+                            error!("Iterator variable '{}' not found in loop context for {}", name, raw_tag);
+                            Err(ParserError::UndefinedVariable(name.clone()))
+                        }
+                    }
+                }
+                None => {
+                    error!("Iterator reference {} used outside of a foreach loop context within property", raw_tag);
+                    Err(ParserError::Processing(format!(
+                        "Iterator reference {} used outside of a foreach loop within property",
+                        raw_tag
+                    )))
+                }
+            }
+        }
         // Arrays resolve by resolving each item
         AstNode::NestedArray(items) => {
             trace!("Resolving NestedArray within property ({} items)", items.len());
             let resolved_items = items.iter()
-                .map(|item_node| resolve_property_value_to_json(item_node, registry, entry_id)) // Recurse
+                .map(|item_node| resolve_property_value_to_json(item_node, registry, entry_id, loop_context)) // Recurse
                 .collect::<Result<Vec<_>, _>>()?;
             trace!(" -> Resolved array: {:?}", resolved_items);
             Ok(Value::Array(resolved_items))
@@ -1107,7 +1254,7 @@ fn resolve_property_value_to_json<P: PluginBridge + Debug>(
         // Objects resolve by resolving their properties (recursive call)
         AstNode::NestedObject(props) => {
             trace!("Resolving NestedObject within property ({} props)", props.len());
-            resolve_properties_to_json(props, registry, entry_id) // Recurse
+            resolve_properties_to_json(props, registry, entry_id, loop_context) // Recurse
         }
     }
 }
@@ -1130,7 +1277,8 @@ impl VariantName for Value {
 fn evaluate_expression<P: PluginBridge + Debug>(
     expr: &Expression,
     registry: &ScopedRegistry<P>,
-    entry_id: &String
+    entry_id: &String,
+    loop_context: Option<&HashMap<String, Value>>,
 ) -> Result<Value, ParserError> {
     // Use debug! for expression evaluation steps
     debug!("EVAL EXPR: {:?}", expr);
@@ -1142,13 +1290,13 @@ fn evaluate_expression<P: PluginBridge + Debug>(
         Expression::Variable { scope, name, .. } => {
             let full_name = format!("{}:{}", scope, name);
             debug!("  -> Variable Lookup: {}", full_name);
-            let result = registry.get_variable(&full_name)?;
+            let result = registry.get_variable(&full_name, loop_context)?;
             debug!("  -> Variable Result: {:?}", result);
             Ok(result)
         }
         Expression::Processor { name, properties, raw_tag } => {
             debug!("  -> Processor Eval Start: {}", raw_tag);
-            let resolved_props = resolve_properties_to_json(properties, registry, entry_id)?;
+            let resolved_props = resolve_properties_to_json(properties, registry, entry_id, loop_context)?;
             debug!("  -> Processor Resolved Props: {:?}", resolved_props);
 
             let processor_instance = registry.instantiate_processor(name, &resolved_props)
@@ -1187,7 +1335,7 @@ fn evaluate_expression<P: PluginBridge + Debug>(
         }
         Expression::UnaryOperation { operator, operand } => {
             debug!("  -> Unary Op: {:?}", operator);
-            let operand_value = evaluate_expression(operand, registry, entry_id)?; // Recurse
+            let operand_value = evaluate_expression(operand, registry, entry_id, loop_context)?; // Recurse
             debug!("  -> Unary Operand Value: {:?}", operand_value);
             let result = match operator {
                 UnaryOperator::Not => Ok(Value::Bool(!is_truthy(&operand_value))),
@@ -1197,7 +1345,7 @@ fn evaluate_expression<P: PluginBridge + Debug>(
         }
         Expression::BinaryOperation { left, operator, right } => {
             debug!("  -> Binary Op: {:?}", operator);
-            let left_value = evaluate_expression(left, registry, entry_id)?; // Recurse left
+            let left_value = evaluate_expression(left, registry, entry_id, loop_context)?; // Recurse left
             debug!("  -> Binary Left Value: {:?}", left_value);
 
             // Short-circuit evaluation for || and &&
@@ -1207,7 +1355,7 @@ fn evaluate_expression<P: PluginBridge + Debug>(
                     debug!("  -> OR Left Truthy: {}", is_left_truthy);
                     if is_left_truthy { return Ok(left_value); } // Return the left value if truthy
                     debug!("  -> OR Evaluating Right");
-                    let right_value = evaluate_expression(right, registry, entry_id)?; // Recurse right only if needed
+                    let right_value = evaluate_expression(right, registry, entry_id, loop_context)?; // Recurse right only if needed
                     debug!("  -> OR Right Value: {:?}", right_value);
                     return Ok(right_value); // Return the right value
                 }
@@ -1216,7 +1364,7 @@ fn evaluate_expression<P: PluginBridge + Debug>(
                      debug!("  -> AND Left Truthy: {}", is_left_truthy);
                     if !is_left_truthy { return Ok(left_value); } // Return the left value if falsy
                      debug!("  -> AND Evaluating Right");
-                    let right_value = evaluate_expression(right, registry, entry_id)?; // Recurse right only if needed
+                    let right_value = evaluate_expression(right, registry, entry_id, loop_context)?; // Recurse right only if needed
                     debug!("  -> AND Right Value: {:?}", right_value);
                     return Ok(right_value); // Return the right value
                 }
@@ -1225,7 +1373,7 @@ fn evaluate_expression<P: PluginBridge + Debug>(
 
             // Evaluate right operand for non-short-circuiting ops
             debug!("  -> Binary Op Evaluating Right");
-            let right_value = evaluate_expression(right, registry, entry_id)?; // Recurse right
+            let right_value = evaluate_expression(right, registry, entry_id, loop_context)?; // Recurse right
             debug!("  -> Binary Right Value: {:?}", right_value);
             // Delegate actual operation
             evaluate_binary_operation(&left_value, *operator, &right_value)
@@ -1338,4 +1486,3 @@ fn evaluate_binary_operation(left: &Value, op: BinaryOperator, right: &Value) ->
     debug!("  -> Op Result: {:?}", result);
     result
 }
-
