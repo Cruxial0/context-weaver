@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::{Arc, RwLock}};
+use std::{collections::{HashMap, HashSet}, sync::{Arc, RwLock}};
 use log::{debug, error, trace, warn};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -8,7 +8,8 @@ use std::fmt::Debug;
 pub struct WorldInfoRegistry<P: PluginBridge + 'static> {
     processor_factories: RwLock<HashMap<String, Box<dyn WorldInfoProcessorFactory<P>>>>,
     plugin_bridge: Arc<P>,
-    variables: HashMap<String, serde_json::Value>
+    variables: HashMap<String, serde_json::Value>,
+    activation_stack: HashSet<String>
 }
 
 pub struct ScopedRegistry<'a, P: PluginBridge + 'static> {
@@ -32,6 +33,10 @@ pub trait VariableResolver {
     fn update_variable(&mut self, name: &str, value: Value) -> Result<(), ParserError>;
     /// Resolves implicit scopes (e.g., `entry:foo` -> `<scope_id>:foo`).
     fn resolve_scope(&self, name: &str) -> Result<(String, String), ParserError>;
+}
+
+pub trait ActivationResolver {
+    fn push_activation(&mut self, id: &str) -> Result<(), ParserError>;
 }
 
 impl<'a, P: PluginBridge> VariableResolver for ScopedRegistry<'a, P> {
@@ -233,12 +238,26 @@ impl<P: PluginBridge + 'static> VariableResolver for WorldInfoRegistry<P> {
     }
 }
 
+impl<P: PluginBridge + 'static> ActivationResolver for ScopedRegistry<'_, P> {
+    fn push_activation(&mut self, id: &str) -> Result<(), ParserError> {
+        self.inner.push_activation(id)
+    }
+}
+
+impl <P: PluginBridge + 'static> ActivationResolver for WorldInfoRegistry<P> {
+    fn push_activation(&mut self, id: &str) -> Result<(), ParserError> {
+        self.activation_stack.insert(id.to_string());
+        Ok(())
+    }
+}
+
 impl<P: PluginBridge + 'static> WorldInfoRegistry<P> {
     pub fn new(plugin_bridge: Arc<P>) -> Self {
         Self {
             processor_factories: RwLock::new(HashMap::new()),
             plugin_bridge,
-            variables: HashMap::new()
+            variables: HashMap::new(),
+            activation_stack: HashSet::new()
         }
     }
 
@@ -269,7 +288,13 @@ impl<P: PluginBridge + 'static> WorldInfoRegistry<P> {
     pub(crate) fn scoped_registry<'a>(&'a mut self, allowed_scopes: &'a [String], scope_id: String) -> ScopedRegistry<'a, P> {
         ScopedRegistry { inner: self, allowed_scopes, scope_id }
     }
-    
+
+    /// Returns a copy of the activation stack, clearing it in the process
+    pub(crate) fn activation_stack(&mut self) -> HashSet<String> {
+        let stack = self.activation_stack.clone();
+        self.activation_stack.clear();
+        stack
+    }
 }
 
 // Define the factory trait

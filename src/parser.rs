@@ -1,8 +1,9 @@
 // src/parser.rs
 
+use crate::core::nodes::empty::EmptyNode;
 // --- Crates ---
 use crate::core::nodes::{TextNode, VariableNode};
-use crate::core::processors::{PluginBridge, ScopedRegistry, VariableResolver};
+use crate::core::processors::{ActivationResolver, PluginBridge, ScopedRegistry, VariableResolver};
 use crate::errors::ParserError;
 use crate::WorldInfoNode; // Placeholder imports
 use pest::iterators::{Pair, Pairs};
@@ -22,7 +23,7 @@ use log::{debug, error, info, trace, warn}; // Import log macros
 #[derive(Debug, Clone)]
 pub enum Expression {
     Literal(Value),
-    Variable { scope: String, name: String, raw_tag: String },
+    Variable { scope: String, name: String, _raw_tag: String },
     Processor { name: String, properties: Vec<(String, AstNode)>, raw_tag: String },
     UnaryOperation { operator: UnaryOperator, operand: Box<Expression> },
     BinaryOperation { left: Box<Expression>, operator: BinaryOperator, right: Box<Expression> },
@@ -47,8 +48,8 @@ pub enum BinaryOperator {
 pub enum AstNode {
     Text(String),
     Processor { name: String, properties: Vec<(String, AstNode)>, raw_tag: String },
-    Trigger { id: String, raw_tag: String },
-    Variable { scope: String, name: String, raw_tag: String },
+    Trigger { id: String, _raw_tag: String },
+    Variable { scope: String, name: String, _raw_tag: String },
     MacroIf { condition: Box<Expression>, then_branch: Vec<AstNode>, else_branch: Option<Vec<AstNode>>, raw_tag: String },
     MacroForeach { item_variable: String, collection: Box<Expression>, body: Vec<AstNode>, raw_tag: String },
     IteratorReference { name: String, raw_tag: String },
@@ -105,8 +106,8 @@ fn parse_expression_pratt(pairs: Pairs<Rule>) -> Result<Expression, ParserError>
             }
             Rule::variable => {
                 match parse_atomic_variable(primary.clone())? {
-                    AstNode::Variable { scope, name, raw_tag } => Ok(Expression::Variable { scope, name, raw_tag }),
-                     other => {
+                    AstNode::Variable { scope, name, _raw_tag } => Ok(Expression::Variable { scope, name, _raw_tag }),
+                    other => {
                         error!("Expected variable node from atomic parse, got {:?}", other);
                         Err(ParserError::Processing(format!("Expected variable node from atomic parse, got non-Variable AST node")))
                     }
@@ -225,7 +226,7 @@ pub fn parse_entry_content<P: PluginBridge + Debug>(
 
 pub fn evaluate_nodes<P: PluginBridge + Debug>(
     nodes: &[AstNode],
-    registry: &ScopedRegistry<P>,
+    registry: &mut ScopedRegistry<P>,
     entry_id: &String,
     loop_context: Option<&HashMap<String, Value>>,
 ) -> Result<Vec<Box<dyn WorldInfoNode>>, ParserError> {
@@ -239,7 +240,7 @@ pub fn evaluate_nodes<P: PluginBridge + Debug>(
 /// Used for recursive evaluation of nested or looping entries
 fn parse_and_evaluate<P: PluginBridge + Debug>(
     raw: &str,
-    registry: &ScopedRegistry<P>,
+    registry: &mut ScopedRegistry<P>,
     entry_id: &String,
     loop_context: Option<&HashMap<String, Value>>
 ) -> Result<Vec<Box<dyn WorldInfoNode>>, ParserError> {
@@ -257,7 +258,7 @@ fn parse_and_evaluate<P: PluginBridge + Debug>(
 pub fn parse_activation_condition<P: PluginBridge + Debug>(
     condition_str: &str,
     context: &str, // The evaluated text context to match keywords/regex against
-    registry: &ScopedRegistry<P>,
+    registry: &mut ScopedRegistry<P>,
     entry_id: &String, // Used for resolving processors/variables within expressions
 ) -> Result<bool, ParserError> {
     info!("Parsing activation condition: '{}'", condition_str);
@@ -705,7 +706,7 @@ fn parse_trigger_content<'i, P: PluginBridge + Debug>(
         ParserError::MissingTriggerId(raw_tag_string.clone())
     })?;
 
-    Ok(AstNode::Trigger { id, raw_tag: raw_tag_string })
+    Ok(AstNode::Trigger { id, _raw_tag: raw_tag_string })
 }
 
 /// Parses a variable_tag_content pair.
@@ -742,7 +743,7 @@ fn parse_variable_content<'i, P: PluginBridge + Debug>(
     let name = name_pair.as_str().to_string();
     trace!("Parsed variable: scope='{}', name='{}'", scope, name);
 
-    Ok(AstNode::Variable { scope, name, raw_tag })
+    Ok(AstNode::Variable { scope, name, _raw_tag: raw_tag })
 }
 
 
@@ -944,7 +945,7 @@ fn parse_atomic_variable(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
             Err(ParserError::Processing(format!("Invalid atomic variable format (empty scope/name): {}", raw_tag)))
         } else {
             trace!("Parsed atomic variable: scope='{}', name='{}'", scope, name);
-            Ok(AstNode::Variable { scope, name, raw_tag })
+            Ok(AstNode::Variable { scope, name, _raw_tag: raw_tag })
         }
     } else {
         error!("Invalid atomic variable format (missing ':'): {}", raw_tag);
@@ -1230,7 +1231,7 @@ fn parse_property_value(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
 /// Resolves a list of AST nodes into final WorldInfoNode objects.
 fn resolve_ast_nodes<P: PluginBridge + Debug>(
     nodes: &[AstNode],
-    registry: &ScopedRegistry<P>,
+    registry: &mut ScopedRegistry<P>,
     entry_id: &String,
     loop_context: Option<&HashMap<String, Value>>,
 ) -> Result<Vec<Box<dyn WorldInfoNode>>, ParserError> {
@@ -1276,7 +1277,7 @@ impl AstNode {
 /// Resolves a single AST node.
 fn resolve_single_node<P: PluginBridge + Debug>(
     node: &AstNode,
-    registry: &ScopedRegistry<P>,
+    registry: &mut ScopedRegistry<P>,
     entry_id: &String,
     loop_context: Option<&HashMap<String, Value>>
 ) -> Result<Vec<Box<dyn WorldInfoNode>>, ParserError> {
@@ -1286,11 +1287,9 @@ fn resolve_single_node<P: PluginBridge + Debug>(
             trace!("Resolving Text node");
             Ok(vec![ Box::new(TextNode { content: content.clone() }) as Box<dyn WorldInfoNode> ])
         },
-        AstNode::Trigger { id, raw_tag } => {
-            // NOTE: This currently just outputs the trigger tag as text.
-            // If triggers need special handling/registration, implement it here.
-            warn!("Resolving Trigger node '{}' as simple text: {}", id, raw_tag);
-            Ok(vec![ Box::new(TextNode { content: format!("<trigger id=\"{}\">", id) }) as Box<dyn WorldInfoNode> ])
+        AstNode::Trigger { id, .. } => {
+            registry.push_activation(id)?;
+            Ok(vec![ Box::new(EmptyNode {}) as Box<dyn WorldInfoNode> ])
         }
         AstNode::Processor { name, properties, raw_tag } => {
             trace!("Resolving Processor node '{}'", name);
@@ -1436,7 +1435,7 @@ fn resolve_single_node<P: PluginBridge + Debug>(
 /// Recursively resolves AST nodes within properties into a serde_json::Value object.
 fn resolve_properties_to_json<P: PluginBridge + Debug>(
     properties: &[(String, AstNode)],
-    registry: &ScopedRegistry<P>,
+    registry: &mut ScopedRegistry<P>,
     entry_id: &String,
     loop_context: Option<&HashMap<String, Value>>,
 ) -> Result<Value, ParserError> {
@@ -1455,7 +1454,7 @@ fn resolve_properties_to_json<P: PluginBridge + Debug>(
 /// Resolves a single property value AST node into a serde_json::Value.
 fn resolve_property_value_to_json<P: PluginBridge + Debug>(
     node: &AstNode,
-    registry: &ScopedRegistry<P>,
+    registry: &mut ScopedRegistry<P>,
     entry_id: &String,
     loop_context: Option<&HashMap<String, Value>>,
 ) -> Result<Value, ParserError> {
@@ -1574,7 +1573,7 @@ impl VariantName for Value {
 /// Evaluates an Expression AST node to a serde_json::Value.
 fn evaluate_expression<P: PluginBridge + Debug>(
     expr: &Expression,
-    registry: &ScopedRegistry<P>,
+    registry: &mut ScopedRegistry<P>,
     entry_id: &String,
     loop_context: Option<&HashMap<String, Value>>,
 ) -> Result<Value, ParserError> {

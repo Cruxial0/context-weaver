@@ -1,5 +1,5 @@
 use core::processors::{PluginBridge, ScopedRegistry, WorldInfoRegistry};
-use std::fmt::Debug;
+use std::{collections::{HashMap, HashSet}, fmt::Debug};
 
 use log::debug;
 use parser::{evaluate_nodes, parse_activation_condition, parse_entry_content, AstNode};
@@ -12,44 +12,93 @@ mod tests;
 
 pub use errors::{ParserError, WorldInfoError};
 
+pub enum ContextNode {
+    TextChunk(String),
+    InsertionPoint(String),
+}
+
+pub struct Context(Vec<ContextNode>);
+
+impl Context {
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    pub fn push(&mut self, node: ContextNode) {
+        self.0.push(node);
+    }
+
+    pub fn text(&self) -> String {
+        let mut result = String::new();
+        for node in &self.0 {
+            if let ContextNode::TextChunk(text) = node {
+                result.push_str(text);
+            }
+        }
+        result
+    }
+}
+
+pub struct WorldInfoSettings {
+    /// List of allowed processors
+    pub permitted_processors: Vec<String>,
+    pub recursion_limit: u32,
+    pub id_length: usize,
+    pub seperate_context_nodes: bool
+}
+
+impl Default for WorldInfoSettings {
+    fn default() -> Self {
+        Self { 
+            permitted_processors: vec!["*".to_string()], 
+            recursion_limit: 10, 
+            id_length: 6, 
+            seperate_context_nodes: true
+        }
+    }
+}
+
 pub struct WorldInfo<P: PluginBridge + 'static> {
     name: String,
     entries: Vec<WorldInfoEntry>,
-    /// List of allowed processors
-    permitted_processors: Vec<String>,
     processor_registry: Box<WorldInfoRegistry<P>>,
     error_stack: Vec<WorldInfoError>,
     id_generator: id::IdGenerator,
+    settings: WorldInfoSettings,
 
     // Stateful data
-    activation_stack: Vec<String>
+    trigger_stack: HashSet<String>,
+    evaluated_entries: HashMap<String, String>
 }
 
 impl<P: PluginBridge> WorldInfo<P>{
-    pub fn evaluate(&mut self, context: String) -> Result<String, &Vec<WorldInfoError>> {
-        let mut result = String::new();
+    pub fn evaluate(&mut self, context: Context) -> Result<String, &Vec<WorldInfoError>> {
         self.reset();
 
         // pre-parse entries
         self.parse_entries();
 
         let mut failed = self.error_stack.len() > 0;
-        let activated_entries = self.filter_activated_entries(&context);
+        let activated_entries = self.filter_activated_entries(&context.text());
 
         for entry in self.entries.iter_mut().filter(|e| activated_entries.contains(&e.id())) {
             let scopes = &entry.scopes.clone();
             let id = entry.id();
-            let scoped_registry = &self.processor_registry.scoped_registry(scopes, id);
+            let mut scoped_registry = self.processor_registry.scoped_registry(scopes, id.clone());
             
             if failed {
                 break;
             }
             
-            match entry.evaluate(scoped_registry) {
-                Ok(content) => result.push_str(&content),
+            match entry.evaluate(&mut scoped_registry) {
+                Ok(content) => {
+                    if !self.evaluated_entries.contains_key(&id) {
+                        self.evaluated_entries.insert(id, content);
+                    }
+                },
                 Err(e) => {
                     failed = true;
-                    self.error_stack.push(e)
+                    self.error_stack.push(e);
                 },
             }
         }
@@ -57,7 +106,82 @@ impl<P: PluginBridge> WorldInfo<P>{
         if failed {
             Err(&self.error_stack)
         } else {
-            Ok(result)
+            self.trigger_stack = self.processor_registry.activation_stack();
+            self.evaluate_activation_stack(&mut 0);
+            Ok(self.format_output(context))
+        }
+    }
+
+    fn format_output(&self, context: Context) -> String {
+        let mut result = String::new();
+        for chunk in context.0 {
+            match chunk {
+                ContextNode::TextChunk(text) => result.push_str(&text),
+                ContextNode::InsertionPoint(id) => {
+                    if self.settings.seperate_context_nodes {
+                        result.push_str("\n");
+                    }
+                    for entry in self.entries_from_insertion(id).iter().map(|e| self.evaluated_entries.get(&e.id()).unwrap()) {
+                        result.push_str(&entry);
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    fn entries_from_insertion(&self, insertion_id: String) -> Vec<&WorldInfoEntry> {
+        let mut result = self.entries
+            .iter()
+            .find(|e| self.evaluated_entries.contains_key(&e.id()))
+            .filter(|e| e.insertion_point == Some(insertion_id))
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        result.sort_by(|a, b| a.order.cmp(&b.order));
+
+        result
+    }
+
+    fn evaluate_activation_stack(&mut self, depth: &mut u32) {
+        let mut failed = false;
+        let mut recurse_stack = self.filter_activated_entries(&self.get_evaluated_context());
+        recurse_stack.retain(|id| !self.trigger_stack.contains(id));
+        
+        let mut new_stack: HashSet<String> = self.trigger_stack.clone();
+        new_stack.extend(recurse_stack);
+        
+        for entry in self.entries.iter_mut().filter(|e| new_stack.contains(&e.id()))
+        {
+            let scopes = &entry.scopes.clone();
+            let id = entry.id();
+            let mut scoped_registry = self.processor_registry.scoped_registry(scopes, id.clone());
+            
+            if failed {
+                break;
+            }
+            
+            match entry.evaluate(&mut scoped_registry) {
+                Ok(content) => {
+                    if !self.evaluated_entries.contains_key(&id) {
+                        self.evaluated_entries.insert(id, content);
+                    }
+                },
+                Err(e) => {
+                    failed = true;
+                    self.error_stack.push(e);
+                },
+            }
+        }
+
+        self.trigger_stack = self.processor_registry.activation_stack();
+        if failed {
+            return;
+        }
+        *depth += 1;
+        
+        if *depth < self.settings.recursion_limit {
+            self.evaluate_activation_stack(depth);
         }
     }
 
@@ -74,9 +198,9 @@ impl<P: PluginBridge> WorldInfo<P>{
         let mut activated_entries: Vec<String> = Vec::new();
         for entry in &mut self.entries {
             let scopes = &entry.scopes.clone();
-            let scoped_registry = &self.processor_registry.scoped_registry(scopes, entry.id());
+            let mut scoped_registry = self.processor_registry.scoped_registry(scopes, entry.id());
 
-            match entry.determine_activation_status(&scoped_registry, context) {
+            match entry.determine_activation_status(&mut scoped_registry, context) {
                 Ok(active) => {
                     if active {
                         activated_entries.push(entry.id());
@@ -88,9 +212,20 @@ impl<P: PluginBridge> WorldInfo<P>{
         activated_entries
     }
     
+    fn get_evaluated_context(&self) -> String {
+        let mut result = String::new();
+        for entry in &self.entries {
+            if self.evaluated_entries.contains_key(&entry.id()) {
+                result.push_str(&(self.evaluated_entries[&entry.id()].clone() + "\n"));
+            }
+        }
+        result
+    }
+
     fn reset(&mut self) {
         self.error_stack.clear();
-        self.activation_stack.clear();
+        self.trigger_stack.clear();
+        self.evaluated_entries.clear();
     }
 }
 
@@ -122,11 +257,12 @@ impl<P: PluginBridge> WorldInfoFactory<P> for WorldInfo<P> {
         WorldInfo {
             name: String::new(),
             entries: Vec::new(),
-            permitted_processors: Vec::new(),
+            settings: Default::default(),
             processor_registry: registry,
             error_stack: Vec::new(),
             id_generator: id::IdGenerator::new(6),
-            activation_stack: Vec::new()
+            trigger_stack: HashSet::new(),
+            evaluated_entries: HashMap::new()
         }
     }
     fn set_name(&mut self, name: &str) -> &mut Self {
@@ -138,7 +274,7 @@ impl<P: PluginBridge> WorldInfoFactory<P> for WorldInfo<P> {
         self
     }
     fn set_permitted_processors(&mut self, processors: Vec<String>) -> &mut Self {
-        self.permitted_processors = processors;
+        self.settings.permitted_processors = processors;
         self
     }
     fn build(&self) -> &WorldInfo::<P> {
@@ -163,6 +299,7 @@ pub struct WorldInfoEntry {
     text: String,
     enabled: bool,
     constant: bool,
+    insertion_point: Option<String>,
 
     // Stateful data
     raw_nodes: Vec<AstNode>,
@@ -181,6 +318,7 @@ impl WorldInfoEntry {
             text: String::new(),
             enabled: true,
             constant: false,
+            insertion_point: None,
             scopes: vec!["global".to_string(), id],
             activation_conditions: Vec::new(),
             content_updated: true,
@@ -206,10 +344,11 @@ pub trait EntryFactory {
     fn set_text(&mut self, text: &str) -> &mut WorldInfoEntry;
     fn set_conditions(&mut self, conditions: Vec<String>) -> &mut WorldInfoEntry;
     fn parse<P: PluginBridge>(&mut self) -> Result<&mut WorldInfoEntry, WorldInfoError>;
-    fn evaluate<P: PluginBridge>(&mut self, registry: &ScopedRegistry<P>) -> Result<String, WorldInfoError>;
-    fn determine_activation_status<P: PluginBridge>(&mut self, registry: &ScopedRegistry<P>, context: &String) -> Result<bool, WorldInfoError>;
+    fn evaluate<P: PluginBridge>(&mut self, registry: &mut ScopedRegistry<P>) -> Result<String, WorldInfoError>;
+    fn determine_activation_status<P: PluginBridge>(&mut self, registry: &mut ScopedRegistry<P>, context: &String) -> Result<bool, WorldInfoError>;
     fn set_enabled(&mut self, enabled: bool) -> &mut WorldInfoEntry;
     fn set_constant(&mut self, constant: bool) -> &mut WorldInfoEntry;
+    fn set_insertion_point(&mut self, insertion_point: String) -> &mut WorldInfoEntry;
 }
 
 impl EntryFactory for WorldInfoEntry {
@@ -237,7 +376,7 @@ impl EntryFactory for WorldInfoEntry {
         self
     }
     
-    fn evaluate<P: PluginBridge>(&mut self, registry: &ScopedRegistry<P>) -> Result<String, WorldInfoError> {
+    fn evaluate<P: PluginBridge>(&mut self, registry: &mut ScopedRegistry<P>) -> Result<String, WorldInfoError> {
         match evaluate_nodes(&self.raw_nodes, registry, &self.id, None) {
             Ok(eval_nodes) => self.nodes = eval_nodes,
             Err(e) => return Err(WorldInfoError::ParserError(e)),
@@ -250,7 +389,7 @@ impl EntryFactory for WorldInfoEntry {
         Ok(result)
     }
     
-    fn determine_activation_status<P: PluginBridge>(&mut self, registry: &ScopedRegistry<P>, context: &String) -> Result<bool, WorldInfoError> {
+    fn determine_activation_status<P: PluginBridge>(&mut self, registry: &mut ScopedRegistry<P>, context: &String) -> Result<bool, WorldInfoError> {
         debug!("Activation conditions: {:?}, constant: {}", self.activation_conditions, self.constant);
         match (self.enabled, self.constant, self.activation_conditions.len() > 0) {
             (true, true, false) => return Ok(true), // Constant entries without additional conditions are active
@@ -286,6 +425,11 @@ impl EntryFactory for WorldInfoEntry {
     
     fn set_constant(&mut self, constant: bool) -> &mut WorldInfoEntry {
         self.constant = constant;
+        self
+    }
+    
+    fn set_insertion_point(&mut self, insertion_point: String) -> &mut WorldInfoEntry {
+        self.insertion_point = Some(insertion_point);
         self
     }
 }

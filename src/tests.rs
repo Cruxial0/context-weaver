@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use rand::Rng;
-    use crate::core::processors::PluginBridge;
+    use crate::{core::processors::PluginBridge, Context, ContextNode};
 
     #[derive(Debug, Clone)]
     struct DummyPluginBridge;
@@ -30,6 +30,13 @@ mod tests {
         let _ = env_logger::builder().is_test(true).filter_level(log::LevelFilter::Trace).try_init();
     }
 
+    fn example_context() -> Context {
+        let mut context = Context::new();
+        context.push(ContextNode::TextChunk(EXAMPLE_INPUT.to_string()));
+        context.push(ContextNode::InsertionPoint("Default".to_string()));
+        context
+    }
+
     #[test]
     fn test_parser() {
         use crate::core::processors::{WildcardProcessorFactory, WorldInfoRegistry, RngProcessorFactory};
@@ -49,20 +56,23 @@ mod tests {
         let entry = worldinfo.new_entry("test", 0);
         entry.set_text(input);
         entry.set_constant(true);
+        entry.set_insertion_point("Default".to_string());
+
+        let context = example_context();
 
         let mut valid_results = vec![];
         for i in 0..100 {
             valid_results.extend_from_slice(
                 &[
-                    format!("The generated number is {}!, Today's weather is sunny!", i),
-                    format!("The generated number is {}!, Today's weather is cloudy!", i),
-                    format!("The generated number is {}!, Today's weather is rainy!", i),
+                    format!("{}\nThe generated number is {}!, Today's weather is sunny!", context.text(), i),
+                    format!("{}\nThe generated number is {}!, Today's weather is cloudy!",context.text(), i),
+                    format!("{}\nThe generated number is {}!, Today's weather is rainy!", context.text(), i),
                 ]
             );
         }
 
-        let evaluated_result = worldinfo.evaluate(EXAMPLE_INPUT.to_string()).unwrap();
-        println!("Evaluated result: {}", evaluated_result);
+        let evaluated_result = worldinfo.evaluate(context).unwrap();
+        println!("Evaluated result: {{\n{}\n}}", evaluated_result);
 
         assert!(valid_results.contains(&evaluated_result));
     }
@@ -85,22 +95,23 @@ mod tests {
         let entry = worldinfo.new_entry("test", 0);
         entry.set_text(&input);
         entry.set_constant(true);
+        entry.set_insertion_point("Default".to_string());
+
+        let context = example_context();
 
         println!("Number of nodes: {}", worldinfo.entries[0].nodes.len());
 
         let mut valid_results = vec![
-            "Today's weather is sunny!".to_string(),
-            "Today's weather is cloudy!".to_string(),
-            "Today's weather is very sunny!".to_string(),
-            "Today's weather is very cloudy!".to_string(),
+            format!("{}\nToday's weather is sunny!", context.text()),
+            format!("{}\nToday's weather is cloudy!", context.text()),
         ];
 
         for i in 0..100 {
-            valid_results.push(format!("Today's weather is random: {}!", i));
+            valid_results.push(format!("{}\nToday's weather is random: {}!", context.text(), i));
         }
 
-        let evaluated_result = worldinfo.evaluate(EXAMPLE_INPUT.to_string()).unwrap();
-        println!("Evaluated result: {}", evaluated_result);
+        let evaluated_result = worldinfo.evaluate(context).unwrap();
+        println!("Evaluated result: {{\n{}\n}}", evaluated_result);
 
         assert!(valid_results.contains(&evaluated_result));
     }
@@ -125,17 +136,19 @@ mod tests {
             )]!"#;
         let mut worldinfo = WorldInfo::new(Box::new(registry));
         let entry = worldinfo.new_entry("test", 0);
-
         entry.set_text(&input);
         entry.set_constant(true);
+        entry.set_insertion_point("Default".to_string());
 
-        let evaluated_result = worldinfo.evaluate(EXAMPLE_INPUT.to_string()).unwrap();
-        println!("Evaluated result: {}", evaluated_result);
+        let context = example_context();
+
+        let evaluated_result = worldinfo.evaluate(example_context()).unwrap();
+        println!("Evaluated result: {{\n{}\n}}", evaluated_result);
 
         let valid_results = vec![
-            "The plugin's forecast is: sunny!".to_string(),
-            "The plugin's forecast is: cloudy!".to_string(),
-            "The plugin's forecast is: rainy!".to_string(),
+            format!("{}\nThe plugin's forecast is: sunny!", context.text()),
+            format!("{}\nThe plugin's forecast is: cloudy!", context.text()),
+            format!("{}\nThe plugin's forecast is: rainy!", context.text()),
         ];
 
         assert!(valid_results.contains(&evaluated_result));
@@ -156,14 +169,16 @@ mod tests {
 
         let mut worldinfo = WorldInfo::new(Box::new(registry));
         let entry = worldinfo.new_entry("test", 0);
-
         entry.set_text(&input);
         entry.set_constant(true);
+        entry.set_insertion_point("Default".to_string());
 
-        let evaluated_result = worldinfo.evaluate(EXAMPLE_INPUT.to_string()).unwrap();
-        println!("Evaluated result: {}", evaluated_result);
+        let context = example_context();
 
-        assert_eq!(evaluated_result, "The variable's contents are \"test\"!");
+        let evaluated_result = worldinfo.evaluate(example_context()).unwrap();
+        println!("Evaluated result: {{\n{}\n}}", evaluated_result);
+
+        assert_eq!(evaluated_result, format!("{}\nThe variable's contents are \"test\"!", context.text()));
     }
     
     #[test]
@@ -192,10 +207,17 @@ mod tests {
 
         entry.set_text(&input);
         entry.set_constant(true);
+        entry.set_insertion_point("Default".to_string());
 
-        let evaluated_result = worldinfo.evaluate(EXAMPLE_INPUT.to_string()).unwrap();
-        let possible_results = vec!["The prophecy is true!", "The prophecy is but a mere hoax!"].iter().map(|s| s.to_string()).collect::<Vec<String>>();
-        println!("Evaluated result: {}", evaluated_result);
+        let context = example_context();
+
+        let evaluated_result = worldinfo.evaluate(example_context()).unwrap();
+        let possible_results = vec![
+            format!("{}\nThe prophecy is true!", context.text()),
+            format!("{}\nThe prophecy is but a mere hoax!", context.text()),
+            ]
+            .iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        println!("Evaluated result: {{\n{}\n}}", evaluated_result);
 
         assert!(possible_results.contains(&evaluated_result));
     }
@@ -223,9 +245,12 @@ mod tests {
 
         entry.set_text(&input);
         entry.set_constant(true);
+        entry.set_insertion_point("Default".to_string());
 
-        let evaluated_result = worldinfo.evaluate(EXAMPLE_INPUT.to_string()).unwrap();
-        let result = format!("The item is 10!The item is 15!The item is 20!The item is 25!The item is 30!");
+        let context = example_context();
+
+        let evaluated_result = worldinfo.evaluate(example_context()).unwrap();
+        let result = format!("{}\nThe item is 10!The item is 15!The item is 20!The item is 25!The item is 30!", context.text());
         println!("Evaluated result: {}", evaluated_result);
 
         assert_eq!(evaluated_result, result);
@@ -249,8 +274,9 @@ mod tests {
 
         entry.set_text(&input);
         entry.set_constant(true);
+        entry.set_insertion_point("Default".to_string());
 
-        let evaluated_result = worldinfo.evaluate(EXAMPLE_INPUT.to_string()).unwrap_err(); // Should fail
+        let evaluated_result = worldinfo.evaluate(example_context()).unwrap_err(); // Should fail
         let valid = matches!(
             &evaluated_result[0],
             WorldInfoError::ParserError(ParserError::ProcessorInstantiation(_, _))
@@ -285,9 +311,12 @@ mod tests {
 
             entry.set_text(&input);
             entry.set_conditions(vec![cond]);
+            entry.set_insertion_point("Default".to_string());
 
-            let evaluated_result = worldinfo.evaluate(EXAMPLE_INPUT.to_string()).unwrap();
-            let possible_results = "We have reached this point!".to_string();
+            let context = example_context();
+
+            let evaluated_result = worldinfo.evaluate(example_context()).unwrap();
+            let possible_results = format!("{}\nWe have reached this point!", context.text());
             println!("Evaluated result: {}", evaluated_result);
 
             assert_eq!(evaluated_result, possible_results);
