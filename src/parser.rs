@@ -9,6 +9,7 @@ use pest::iterators::{Pair, Pairs};
 use pest::Parser;
 use pest_derive::Parser;
 use pest::pratt_parser::{Op, PrattParser};
+use regex::RegexBuilder;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -122,7 +123,7 @@ fn parse_expression_pratt(pairs: Pairs<Rule>) -> Result<Expression, ParserError>
             }
             // Allow direct matching of literal components
             Rule::number | Rule::boolean | Rule::null | Rule::quoted_string => {
-                 match parse_literal(primary.clone())? {
+                match parse_literal(primary.clone())? {
                     AstNode::NestedValue(v) => Ok(Expression::Literal(v)),
                     other => {
                         error!("Expected literal value from specific literal rule, got {:?}", other);
@@ -132,7 +133,7 @@ fn parse_expression_pratt(pairs: Pairs<Rule>) -> Result<Expression, ParserError>
             }
             Rule::string => { // Handle silent string rule
                 let inner = primary.clone().into_inner().next().ok_or_else(|| ParserError::Processing("Empty string rule".to_string()))?;
-                 match parse_literal(inner)? {
+                match parse_literal(inner)? {
                     AstNode::NestedValue(v) => Ok(Expression::Literal(v)),
                     other => {
                         error!("Expected literal value from string rule, got {:?}", other);
@@ -197,9 +198,7 @@ fn parse_expression_pratt(pairs: Pairs<Rule>) -> Result<Expression, ParserError>
 /// Parses the raw input string into resolved WorldInfoNode objects.
 pub fn parse_entry_content<P: PluginBridge + Debug>(
     raw: &str,
-    registry: &ScopedRegistry<P>,
-    entry_id: &String
-) -> Result<Vec<Box<dyn WorldInfoNode>>, ParserError> {
+) -> Result<Vec<AstNode>, ParserError> {
     info!("Parsing input (first 50 chars): {:?}", raw.chars().take(50).collect::<String>());
     trace!("Full raw input: {:?}", raw); // Use trace for potentially large input
     let pairs = WorldInfoParser::parse(Rule::input, raw)
@@ -219,12 +218,315 @@ pub fn parse_entry_content<P: PluginBridge + Debug>(
     }
 
     let mut inner_pairs = input_pair.clone().into_inner().peekable();
-    let ast = build_ast_from_pairs::<P>(&mut inner_pairs)?;
-    debug!("Built AST: {:?}", ast); // Debug level for AST structure
+    let raw_ast = build_ast_from_pairs::<P>(&mut inner_pairs)?;
+    debug!("Built AST: {:?}", raw_ast); // Debug level for AST structure
+    Ok(optimize_ast_nodes(raw_ast))
+}
 
-    let resolved = resolve_ast_nodes(&ast, registry, entry_id, None)?;
+pub fn evaluate_nodes<P: PluginBridge + Debug>(
+    nodes: &[AstNode],
+    registry: &ScopedRegistry<P>,
+    entry_id: &String,
+    loop_context: Option<&HashMap<String, Value>>,
+) -> Result<Vec<Box<dyn WorldInfoNode>>, ParserError> {
+    let resolved = resolve_ast_nodes(nodes, registry, entry_id, loop_context)?;
     debug!("Resolved Nodes (count: {}): {:?}", resolved.len(), resolved.iter().map(|n| n.name()).collect::<Vec<_>>());
     Ok(resolved)
+}
+
+/// Internal function for parsing and evaluating content from string.
+/// 
+/// Used for recursive evaluation of nested or looping entries
+fn parse_and_evaluate<P: PluginBridge + Debug>(
+    raw: &str,
+    registry: &ScopedRegistry<P>,
+    entry_id: &String,
+    loop_context: Option<&HashMap<String, Value>>
+) -> Result<Vec<Box<dyn WorldInfoNode>>, ParserError> {
+    let nodes = parse_entry_content::<P>(raw)?;
+    evaluate_nodes(&nodes, registry, entry_id, loop_context)
+}
+
+/// Parses an activation condition string and evaluates it against the context.
+///
+/// Activation conditions can be:
+/// 1. Simple keywords (case-insensitive match against context).
+/// 2. Keywords that are variables or processors (evaluated, then matched).
+/// 3. Regex patterns (`/pattern/flags`) where the pattern itself can contain evaluated variables/processors.
+/// 4. Comparison expressions involving variables, processors, etc.
+pub fn parse_activation_condition<P: PluginBridge + Debug>(
+    condition_str: &str,
+    context: &str, // The evaluated text context to match keywords/regex against
+    registry: &ScopedRegistry<P>,
+    entry_id: &String, // Used for resolving processors/variables within expressions
+) -> Result<bool, ParserError> {
+    info!("Parsing activation condition: '{}'", condition_str);
+    trace!("Context for condition: '{}'", context);
+
+    // 1. Parse the condition string using the specific entry rule
+    let mut pairs = WorldInfoParser::parse(Rule::cond_input, condition_str)
+        .map_err(|e| {
+            error!("Pest parsing failed for activation condition '{}': {}", condition_str, e);
+            ParserError::PestParse(e.with_path(&format!("activation condition: {}", condition_str)))
+        })?;
+
+    // Expect SOI ~ condition ~ EOI
+    let cond_input_pair = pairs.next().ok_or_else(|| {
+        error!("Empty parse result for activation condition: {}", condition_str);
+        ParserError::Processing(format!("Empty parse result for activation condition: {}", condition_str))
+    })?;
+    if cond_input_pair.as_rule() != Rule::cond_input {
+        error!("Expected Rule::cond_input for activation condition, found {:?}", cond_input_pair.as_rule());
+        return Err(ParserError::Processing(format!("Expected Rule::cond_input for activation condition, found {:?}", cond_input_pair.as_rule())));
+    }
+
+    // Get the actual condition rule inside cond_input
+    let condition_pair = cond_input_pair.into_inner()
+        .find(|p| p.as_rule() == Rule::condition)
+        .ok_or_else(|| {
+            error!("Could not find Rule::condition within Rule::cond_input for: {}", condition_str);
+            ParserError::Processing(format!("Could not find Rule::condition within Rule::cond_input for: {}", condition_str))
+        })?;
+
+    // 2. Determine the type of condition based on its *first inner* rule
+    let inner_condition = condition_pair.clone().into_inner().next().ok_or_else(|| {
+        error!("Rule::condition was empty for: {}", condition_str);
+        ParserError::Processing(format!("Rule::condition was empty for: {}", condition_str))
+    })?;
+
+    match inner_condition.as_rule() {
+        // --- Keyword Condition (handles simple, variable, or processor) ---
+        Rule::keyword_condition => {
+            // The keyword_condition rule itself is non-atomic. Get its inner content.
+            let actual_keyword_content = inner_condition.into_inner().next().ok_or_else(|| {
+                error!("keyword_condition rule was empty for: {}", condition_str);
+                ParserError::Processing(format!("keyword_condition rule was empty for: {}", condition_str))
+            })?;
+
+            // Determine if it's a variable, processor, or simple keyword and get its string value
+            let keyword_value_str = match actual_keyword_content.as_rule() {
+                Rule::variable => {
+                    let var_tag = actual_keyword_content.as_str();
+                    debug!("Activation Condition Type: Keyword (Variable: '{}')", var_tag);
+                    // Parse the variable AST node
+                    let var_node = parse_variable_content::<P>(actual_keyword_content)?;
+                    // Evaluate the variable node to a string value using existing resolver logic
+                    let resolved_val = resolve_property_value_to_json(&var_node, registry, entry_id, None)?;
+                    value_to_string_for_keyword(&resolved_val)
+                        .ok_or_else(|| ParserError::Evaluation(format!(
+                            "Variable '{}' used as keyword did not evaluate to a string or number", var_tag
+                        )))?
+                }
+                Rule::processor => {
+                    let proc_tag = actual_keyword_content.as_str();
+                    debug!("Activation Condition Type: Keyword (Processor: '{}')", proc_tag);
+                    // Parse the processor AST node
+                    let proc_node = parse_processor_content::<P>(actual_keyword_content)?;
+                    // Evaluate the processor node to a string value using existing resolver logic
+                    let resolved_val = resolve_property_value_to_json(&proc_node, registry, entry_id, None)?;
+                    value_to_string_for_keyword(&resolved_val)
+                        .ok_or_else(|| ParserError::Evaluation(format!(
+                            "Processor '{}' used as keyword did not evaluate to a string or number", proc_tag
+                        )))?
+                }
+                Rule::simple_keyword => {
+                    let keyword = actual_keyword_content.as_str().trim();
+                    debug!("Activation Condition Type: Keyword (Simple: '{}')", keyword);
+                    keyword.to_string()
+                }
+                // This shouldn't happen if the grammar is correct
+                rule => {
+                    error!("Unexpected rule {:?} found inside keyword_condition for '{}'", rule, condition_str);
+                    return Err(ParserError::InvalidRule(rule));
+                }
+            };
+
+            // Perform the check
+            if keyword_value_str.is_empty() {
+                warn!("Evaluated keyword condition resulted in an empty string. Treated as false.");
+                return Ok(false);
+            }
+            // Perform case-insensitive search using the evaluated/extracted keyword string
+            let result = context.to_lowercase().contains(&keyword_value_str.to_lowercase());
+            debug!("Keyword search ('{}') result in context: {}", keyword_value_str, result);
+            Ok(result)
+        }
+
+        // --- Regex Condition ---
+        Rule::regex_condition => {
+            debug!("Activation Condition Type: Regex ('{}')", inner_condition.as_str());
+            let mut inner_regex_pairs = inner_condition.into_inner(); // Pairs inside regex_condition rule: regex_pattern, regex_flags?
+
+            let pattern_pair = inner_regex_pairs.next().ok_or_else(|| ParserError::Processing("Regex condition missing pattern".to_string()))?;
+            if pattern_pair.as_rule() != Rule::regex_pattern {
+                error!("Expected regex_pattern, got {:?}", pattern_pair.as_rule());
+                return Err(ParserError::Processing(format!("Expected regex_pattern, got {:?}", pattern_pair.as_rule())));
+            }
+
+            // --- Evaluate the pattern ---
+            let mut evaluated_pattern = String::new();
+            trace!("Evaluating regex pattern content: {}", pattern_pair.as_str());
+            for inner_pair in pattern_pair.into_inner() { // Iterate through pairs inside regex_pattern: escape | variable | processor | text_in_regex
+                 match inner_pair.as_rule() {
+                    Rule::variable => {
+                        let var_tag = inner_pair.as_str();
+                        trace!("  Evaluating variable in regex pattern: {}", var_tag);
+                        let var_node = parse_variable_content::<P>(inner_pair)?;
+                        let resolved_val = resolve_property_value_to_json(&var_node, registry, entry_id, None)?;
+                        let value_str = value_to_string_for_keyword(&resolved_val)
+                            .ok_or_else(|| ParserError::Evaluation(format!(
+                                "Variable '{}' inside regex pattern did not evaluate to a string or number", var_tag
+                            )))?;
+                        evaluated_pattern.push_str(&value_str);
+                    }
+                    Rule::processor => {
+                        let proc_tag = inner_pair.as_str();
+                        trace!("  Evaluating processor in regex pattern: {}", proc_tag);
+                        let proc_node = parse_processor_content::<P>(inner_pair)?;
+                        let resolved_val = resolve_property_value_to_json(&proc_node, registry, entry_id, None)?;
+                        let value_str = value_to_string_for_keyword(&resolved_val)
+                            .ok_or_else(|| ParserError::Evaluation(format!(
+                                "Processor '{}' inside regex pattern did not evaluate to a string or number", proc_tag
+                            )))?;
+                        evaluated_pattern.push_str(&value_str);
+                    }
+                    Rule::text_in_regex => {
+                        trace!("  Appending text in regex pattern: {}", inner_pair.as_str());
+                        evaluated_pattern.push_str(inner_pair.as_str());
+                    }
+                    Rule::escape => {
+                        // Handle the escape sequence by unescaping it and appending
+                        trace!("  Appending escaped char in regex pattern: {}", inner_pair.as_str());
+                        let unescaped_char = unescape_char_for_regex(inner_pair)?;
+                        evaluated_pattern.push(unescaped_char);
+                    }
+                        rule => {
+                        error!("Unexpected rule {:?} found inside regex_pattern for '{}'", rule, condition_str);
+                        return Err(ParserError::InvalidRule(rule));
+                    }
+                }
+            }
+            debug!("Evaluated regex pattern: '{}'", evaluated_pattern);
+            // --- End pattern evaluation ---
+
+            let flags_pair = inner_regex_pairs.next(); // Flags are optional
+            let flags = flags_pair.map(|p| p.as_str()).unwrap_or("");
+            trace!("Regex flags: '{}'", flags);
+
+            // Build regex with flags using the *evaluated* pattern
+            let mut builder = RegexBuilder::new(&evaluated_pattern); // Use evaluated_pattern here
+            builder.case_insensitive(flags.contains('i'));
+            builder.multi_line(flags.contains('m'));
+            builder.dot_matches_new_line(flags.contains('s'));
+            // Note: 'g' (global) isn't directly set, `is_match` finds *any* match.
+
+            let regex = builder.build().map_err(|e| {
+                error!("Invalid regex pattern '{}' (evaluated from '{}', flags '{}'): {}", evaluated_pattern, condition_str, flags, e);
+                ParserError::RegexCompilation(evaluated_pattern.to_string(), e.to_string())
+            })?;
+
+            let result = regex.is_match(context);
+            debug!("Regex match result: {}", result);
+            Ok(result)
+        }
+
+        // --- Comparison Condition (Expression) ---
+        Rule::comparison_condition => {
+            debug!("Activation Condition Type: Comparison ('{}')", inner_condition.as_str());
+            // The comparison_condition directly contains an expression
+            let expression_pairs = inner_condition.into_inner();
+
+            // Parse the expression using the Pratt parser
+            let expression_ast = parse_expression_pratt(expression_pairs)?;
+            debug!("Parsed comparison expression AST: {:?}", expression_ast);
+
+            // Evaluate the expression (no loop context needed here)
+            let evaluation_result = evaluate_expression(&expression_ast, registry, entry_id, None)?;
+            debug!("Evaluated comparison expression result: {:?}", evaluation_result);
+
+            // Check truthiness of the result
+            let result = is_truthy(&evaluation_result);
+            debug!("Comparison expression truthiness: {}", result);
+            Ok(result)
+        }
+
+        // Should not happen if grammar is correct and condition rule is exhaustive
+        rule => {
+            error!("Unexpected rule type {:?} found directly inside Rule::condition for '{}'", rule, condition_str);
+            Err(ParserError::InvalidRule(rule))
+        }
+    }
+}
+
+/// Helper function to convert a JSON Value to a string suitable for keyword matching
+/// or for inserting into a regex pattern.
+/// Handles String and Number types. Returns None for others.
+fn value_to_string_for_keyword(value: &Value) -> Option<String> {
+    match value {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        // Decide how to handle other types (e.g., bool, null, array, object)
+        // Currently, they won't match as keywords or be inserted into regex patterns.
+        _ => None,
+    }
+}
+
+/// Helper function to unescape a single character from an `escape` rule pair, specifically for regex patterns.
+/// This is simpler than `unescape_string` as it only handles one char at a time.
+fn unescape_char_for_regex(pair: Pair<Rule>) -> Result<char, ParserError> {
+    if pair.as_rule() != Rule::escape {
+        return Err(ParserError::Processing(format!("Expected escape rule, got {:?}", pair.as_rule())));
+    }
+    let mut inner = pair.into_inner(); // Should contain '\' and the escaped char/sequence
+    let _backslash = inner.next(); // Consume the backslash itself
+    let escaped_part = inner.next().ok_or_else(|| ParserError::Processing("Empty escape sequence".to_string()))?;
+
+    match escaped_part.as_str() {
+        "\"" => Ok('"'), "\\" => Ok('\\'), "/" => Ok('/'),
+        "b" => Ok('\u{0008}'), "f" => Ok('\u{000C}'), "n" => Ok('\n'),
+        "r" => Ok('\r'), "t" => Ok('\t'),
+        // Handle unicode escape
+        u if u.starts_with('u') => {
+            let hex_code = &u[1..]; // Get the 4 hex digits
+            if hex_code.len() == 4 && hex_code.chars().all(|c| c.is_ascii_hexdigit()) {
+                 let code_point = u32::from_str_radix(hex_code, 16).map_err(|_| {
+                     ParserError::Processing(format!("Invalid unicode escape sequence: failed to parse hex \\u{}", hex_code))
+                 })?;
+                 std::char::from_u32(code_point).ok_or_else(|| {
+                     ParserError::Processing(format!("Invalid unicode code point: {}", code_point))
+                 })
+            } else {
+                Err(ParserError::Processing(format!("Invalid unicode escape sequence: \\u{}", hex_code)))
+            }
+        }
+        // If it's none of the known escapes, just return the character after the backslash literally
+        other if other.chars().count() == 1 => Ok(other.chars().next().unwrap()),
+        _ => Err(ParserError::Processing(format!("Invalid escape sequence: \\{}", escaped_part.as_str()))),
+    }
+}
+
+/// Helper function to optimize AST nodes
+/// 
+/// - Combines adjacent Text nodes
+fn optimize_ast_nodes(ast_nodes: Vec<AstNode>) -> Vec<AstNode> {
+    let mut optimized_nodes = Vec::new();
+    let mut current_text = String::new();
+    for node in ast_nodes {
+        match node {
+            AstNode::Text(text) => current_text.push_str(&text),
+            _ => {
+                if current_text.len() > 0 {
+                    optimized_nodes.push(AstNode::Text(current_text));
+                    current_text = String::new();
+                }
+                optimized_nodes.push(node);
+            }
+        }
+    }
+    if current_text.len() > 0 {
+        optimized_nodes.push(AstNode::Text(current_text));
+    }
+    optimized_nodes
 }
 
 // --- AST Building ---
@@ -1182,42 +1484,6 @@ fn resolve_property_value_to_json<P: PluginBridge + Debug>(
             trace!("Resolving variable '{}' within property", full_name);
             registry.get_variable(&full_name, loop_context)
         }
-        AstNode::IteratorReference { name, .. } => {
-            trace!("Resolving iterator reference '{}' within property", name);
-            registry.get_variable(name, loop_context)
-        }
-        // Nested values might need re-parsing if they are strings containing tags
-        AstNode::NestedValue(v) => {
-            trace!("Resolving NestedValue within property: {:?}", v);
-            if let Value::String(s) = v {
-                // Check if the string itself contains tags that need evaluation
-                if s.contains("@[") || s.contains("<trigger") || s.contains("{{") || s.contains("{#") {
-                    debug!("String literal contains tags, re-parsing/evaluating: {:?}", s);
-                    // Re-parse the string content as if it were top-level input
-                    let inner_resolved_nodes = parse_entry_content(s, registry, entry_id)?;
-                    let mut combined_content = String::new();
-                    for res_node in inner_resolved_nodes {
-                        match res_node.content() {
-                            Ok(content) => combined_content.push_str(&content),
-                            Err(e) => {
-                                error!("Failed to get content from re-parsed string node: {}", e);
-                                return Err(ParserError::ProcessorExecution(format!("Failed to get content from re-parsed string node: {}", e)));
-                            }
-                        }
-                    }
-                    trace!(" -> Re-parsed string resolved to: {:?}", combined_content);
-                    Ok(Value::String(combined_content))
-                } else {
-                    // String literal has no tags, use it directly
-                    trace!(" -> Using string literal directly");
-                    Ok(v.clone())
-                }
-            } else {
-                // Not a string, just clone the literal value (Number, Bool, Null)
-                trace!(" -> Using non-string literal directly");
-                Ok(v.clone())
-            }
-        }
         AstNode::IteratorReference { name, raw_tag } => {
             debug!("Resolving iterator reference {} within property", raw_tag);
             match loop_context {
@@ -1240,6 +1506,38 @@ fn resolve_property_value_to_json<P: PluginBridge + Debug>(
                         raw_tag
                     )))
                 }
+            }
+        }
+        // Nested values might need re-parsing if they are strings containing tags
+        AstNode::NestedValue(v) => {
+            trace!("Resolving NestedValue within property: {:?}", v);
+            if let Value::String(s) = v {
+                // Check if the string itself contains tags that need evaluation
+                if s.contains("@[") || s.contains("<trigger") || s.contains("{{") || s.contains("{#") {
+                    debug!("String literal contains tags, re-parsing/evaluating: {:?}", s);
+                    // Re-parse the string content as if it were top-level input
+                    let inner_resolved_nodes = parse_and_evaluate(s, registry, entry_id, loop_context)?;
+                    let mut combined_content = String::new();
+                    for res_node in inner_resolved_nodes {
+                        match res_node.content() {
+                            Ok(content) => combined_content.push_str(&content),
+                            Err(e) => {
+                                error!("Failed to get content from re-parsed string node: {}", e);
+                                return Err(ParserError::ProcessorExecution(format!("Failed to get content from re-parsed string node: {}", e)));
+                            }
+                        }
+                    }
+                    trace!(" -> Re-parsed string resolved to: {:?}", combined_content);
+                    Ok(Value::String(combined_content))
+                } else {
+                    // String literal has no tags, use it directly
+                    trace!(" -> Using string literal directly");
+                    Ok(v.clone())
+                }
+            } else {
+                // Not a string, just clone the literal value (Number, Bool, Null)
+                trace!(" -> Using non-string literal directly");
+                Ok(v.clone())
             }
         }
         // Arrays resolve by resolving each item
@@ -1443,7 +1741,7 @@ fn evaluate_binary_operation(left: &Value, op: BinaryOperator, right: &Value) ->
 
         // --- Arithmetic ---
         BinaryOperator::Add | BinaryOperator::Sub | BinaryOperator::Mul | BinaryOperator::Div => {
-             match (left, right) {
+            match (left, right) {
                 (Value::Number(l), Value::Number(r)) => {
                     // Perform arithmetic using f64
                     let l_f64 = l.as_f64().ok_or_else(|| ParserError::Evaluation(format!("Left operand is not a valid f64 for arithmetic: {:?}", l)))?;

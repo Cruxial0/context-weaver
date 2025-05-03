@@ -1,10 +1,8 @@
-// Grammar for parsing text with embedded processors, triggers, variables, and macros.
+// Grammar for parsing text with embedded processors, triggers, variables, macros, and activation conditions.
 
 // --- Entry Point & Basic Structure ---
-// Reverted to original input rule
 input = { SOI ~ (macro_tag | processor | trigger | variable | text | WHITESPACE)* ~ EOI }
-cond_input = {SOI ~ condition* ~ EOI}
-
+cond_input = { SOI ~ condition ~ EOI }
 
 // --- Whitespace and Comments (ignored in most places via `_`) ---
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
@@ -63,6 +61,25 @@ iterator_reference = { "{{" ~ identifier ~ "}}" }
 // Update inner_nodes to use the unified rules
 inner_nodes = { (macro_tag | processor | trigger | variable | iterator_reference | text)* }
 
+// --- Activation Condition Rules ---
+// Main condition rule that handles all types of activation conditions
+condition = { comparison_condition | regex_condition | keyword_condition }
+
+// Simple keyword (equivalent to /KEYWORD/gm)
+keyword_condition = { variable | processor | simple_keyword }
+
+// Simple keyword: sequence of non-whitespace, non-comma, non-special-start chars
+// This rule is atomic (@) because we just want its string content directly.
+simple_keyword = @{ (!(WHITESPACE | "," | "/" | "{{" | "@[" | "<trigger" | "{#") ~ ANY)+ }
+
+// Custom regex pattern
+regex_condition = { "/" ~ regex_pattern ~ "/" ~ regex_flags? }
+// Make regex_pattern non-atomic and allow inner elements
+regex_pattern = { (escape | variable | processor | text_in_regex )+ } // Allow var/proc/text inside, disallow '/' and '\n' implicitly via text_in_regex
+regex_flags = @{ ASCII_ALPHA+ }
+
+// Comparison conditions (involving variables, processors, etc.)
+comparison_condition = { expression }
 
 // --- Expressions (Enhanced for Arithmetic, Comparisons, and Logic) ---
 // Use Pest's built-in precedence climber
@@ -119,6 +136,10 @@ identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")*? }
 quoted_string = _{ "\"" ~ string_content? ~ "\"" }
 string_content = @{ (escape | !("\"" | "\\") ~ ANY)+ }
 escape = { "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t" | "u" ~ ASCII_HEX_DIGIT{4}) }
+
+// Helper for plain text specifically within regex patterns
+// It stops at delimiters like /, \n, \, {{, @[
+text_in_regex = @{ (!("/" | "\n" | "\\" | "{{" | "@[") ~ ANY)+ }
 
 // --- Object and Array (Pseudo-JSON within properties) ---
 object = { "{" ~ WHITESPACE* ~ properties? ~ WHITESPACE* ~ "}" }

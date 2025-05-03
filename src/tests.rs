@@ -24,6 +24,8 @@ mod tests {
         format!("The plugin's forecast is: {}", items[index].as_str().unwrap())
     }
 
+    static EXAMPLE_INPUT: &str = "This is an example string with meant to serve as an example context. It contains words such as TRIGGER and TRIGGER2. Here is a short story: \"The quick brown fox jumps over the lazy dog.\"";
+
     fn init() {
         let _ = env_logger::builder().is_test(true).filter_level(log::LevelFilter::Trace).try_init();
     }
@@ -46,6 +48,7 @@ mod tests {
 
         let entry = worldinfo.new_entry("test", 0);
         entry.set_text(input);
+        entry.set_constant(true);
 
         let mut valid_results = vec![];
         for i in 0..100 {
@@ -58,7 +61,7 @@ mod tests {
             );
         }
 
-        let evaluated_result = worldinfo.evaluate().unwrap();
+        let evaluated_result = worldinfo.evaluate(EXAMPLE_INPUT.to_string()).unwrap();
         println!("Evaluated result: {}", evaluated_result);
 
         assert!(valid_results.contains(&evaluated_result));
@@ -81,6 +84,7 @@ mod tests {
         let mut worldinfo = WorldInfo::new(Box::new(registry));
         let entry = worldinfo.new_entry("test", 0);
         entry.set_text(&input);
+        entry.set_constant(true);
 
         println!("Number of nodes: {}", worldinfo.entries[0].nodes.len());
 
@@ -95,7 +99,7 @@ mod tests {
             valid_results.push(format!("Today's weather is random: {}!", i));
         }
 
-        let evaluated_result = worldinfo.evaluate().unwrap();
+        let evaluated_result = worldinfo.evaluate(EXAMPLE_INPUT.to_string()).unwrap();
         println!("Evaluated result: {}", evaluated_result);
 
         assert!(valid_results.contains(&evaluated_result));
@@ -123,8 +127,9 @@ mod tests {
         let entry = worldinfo.new_entry("test", 0);
 
         entry.set_text(&input);
+        entry.set_constant(true);
 
-        let evaluated_result = worldinfo.evaluate().unwrap();
+        let evaluated_result = worldinfo.evaluate(EXAMPLE_INPUT.to_string()).unwrap();
         println!("Evaluated result: {}", evaluated_result);
 
         let valid_results = vec![
@@ -153,8 +158,9 @@ mod tests {
         let entry = worldinfo.new_entry("test", 0);
 
         entry.set_text(&input);
+        entry.set_constant(true);
 
-        let evaluated_result = worldinfo.evaluate().unwrap();
+        let evaluated_result = worldinfo.evaluate(EXAMPLE_INPUT.to_string()).unwrap();
         println!("Evaluated result: {}", evaluated_result);
 
         assert_eq!(evaluated_result, "The variable's contents are \"test\"!");
@@ -185,8 +191,9 @@ mod tests {
         let entry = worldinfo.new_entry("test", 0);
 
         entry.set_text(&input);
+        entry.set_constant(true);
 
-        let evaluated_result = worldinfo.evaluate().unwrap();
+        let evaluated_result = worldinfo.evaluate(EXAMPLE_INPUT.to_string()).unwrap();
         let possible_results = vec!["The prophecy is true!", "The prophecy is but a mere hoax!"].iter().map(|s| s.to_string()).collect::<Vec<String>>();
         println!("Evaluated result: {}", evaluated_result);
 
@@ -207,7 +214,7 @@ mod tests {
 
         let input = "
         {# foreach item in {{global:array}} #}
-            The item is @[weaver.core.rng(min: 0, max: {{item}})]!\n
+            The item is {{item}}!\n
         {# endforeach #}
         ";
 
@@ -215,9 +222,10 @@ mod tests {
         let entry = worldinfo.new_entry("test", 0);
 
         entry.set_text(&input);
+        entry.set_constant(true);
 
-        let evaluated_result = worldinfo.evaluate().unwrap();
-        let result = format!("The item is 10!\nThe item is 15!\nThe item is 20!\nThe item is 25!\nThe item is 30!");
+        let evaluated_result = worldinfo.evaluate(EXAMPLE_INPUT.to_string()).unwrap();
+        let result = format!("The item is 10!The item is 15!The item is 20!The item is 25!The item is 30!");
         println!("Evaluated result: {}", evaluated_result);
 
         assert_eq!(evaluated_result, result);
@@ -240,13 +248,49 @@ mod tests {
         let entry = worldinfo.new_entry("test", 0);
 
         entry.set_text(&input);
+        entry.set_constant(true);
 
-        let evaluated_result = worldinfo.evaluate().unwrap_err(); // Should fail
+        let evaluated_result = worldinfo.evaluate(EXAMPLE_INPUT.to_string()).unwrap_err(); // Should fail
         let valid = matches!(
             &evaluated_result[0],
             WorldInfoError::ParserError(ParserError::ProcessorInstantiation(_, _))
         );
 
         assert!(valid);
+    }
+
+    #[test]
+    fn test_activation_conditions() {
+        use crate::core::processors::{WorldInfoRegistry, RngProcessorFactory};
+        use crate::{WorldInfo, EntryFactory, WorldInfoFactory};
+        use std::sync::Arc;
+
+        init();
+
+        let conditions = vec!["TRIGGER", "{{global:trigger}}", "{{global:counter}} == 5", "@[weaver.core.rng(min: 2, max: 10)] > 1", "{{global:counter}} >= 5 && {{global:counter}} < 10"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<String>>();
+
+        for cond in conditions {
+            let mut registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
+            registry.register_processor("weaver.core.rng", Box::new(RngProcessorFactory));
+            registry.register_variable("global:trigger".to_string(), true.into());
+            registry.register_variable("global:counter".to_string(), 5.into());
+
+            let input = "We have reached this point!";
+
+            let mut worldinfo = WorldInfo::new(Box::new(registry));
+            let entry = worldinfo.new_entry("test", 0);
+
+            entry.set_text(&input);
+            entry.set_conditions(vec![cond]);
+
+            let evaluated_result = worldinfo.evaluate(EXAMPLE_INPUT.to_string()).unwrap();
+            let possible_results = "We have reached this point!".to_string();
+            println!("Evaluated result: {}", evaluated_result);
+
+            assert_eq!(evaluated_result, possible_results);
+        }
     }
 }
