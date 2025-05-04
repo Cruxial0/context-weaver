@@ -54,7 +54,7 @@ impl<'a, P: PluginBridge + 'static> ScopedRegistry<'a, P> {
     }
 }
 
-// --- Resolver Traits (Unchanged definitions) ---
+// --- Resolver Traits  ---
 pub trait VariableResolver {
     fn get_variable(
         &self,
@@ -91,23 +91,23 @@ impl<'a, P: PluginBridge + Debug> VariableResolver for ScopedRegistry<'a, P> {
 
         // --- Loop Context Check ---
         if let Some(context) = loop_context {
-             if !full_name.contains(':') {
+            if !full_name.contains(':') {
                 if let Some(value) = context.get(full_name) {
                     debug!("Found variable '{}' in loop context (unscoped)", full_name);
                     return Ok(value.clone());
                 }
-                 trace!("Variable '{}' not found in loop context (unscoped), proceeding to registry lookup.", full_name);
+                trace!("Variable '{}' not found in loop context (unscoped), proceeding to registry lookup.", full_name);
             } else {
                  match self.resolve_scope(full_name) {
                     Ok((ref scope, ref name)) if scope == &self.scope_id => {
-                         if let Some(value) = context.get(name) {
+                        if let Some(value) = context.get(name) {
                             debug!("Found variable '{}:{}' (resolved to local) in loop context", scope, name);
                             return Ok(value.clone());
                         }
                         trace!("Variable '{}:{}' (resolved to local) not found in loop context, proceeding to registry lookup.", scope, name);
                     }
                     Ok((scope, name)) => {
-                         trace!("Variable '{}:{}' resolved to non-local scope, ignoring loop context.", scope, name);
+                        trace!("Variable '{}:{}' resolved to non-local scope, ignoring loop context.", scope, name);
                     }
                     Err(e) => {
                         warn!("Error resolving scope for '{}' during loop context check: {:?}. Proceeding to registry lookup.", full_name, e);
@@ -163,7 +163,7 @@ impl<'a, P: PluginBridge + Debug> VariableResolver for ScopedRegistry<'a, P> {
 
         // Permission check for insertion
         if scope != "global" && !self.allowed_scopes.contains(&scope) {
-             error!(
+            error!(
                 "Permission denied for scope '{}' trying to insert variable '{}' into scope '{}'",
                 self.scope_id, name, scope
             );
@@ -198,7 +198,7 @@ impl<'a, P: PluginBridge + Debug> VariableResolver for ScopedRegistry<'a, P> {
 
         // Permission check for update
         if scope != "global" && !self.allowed_scopes.contains(&scope) {
-             error!(
+            error!(
                 "Permission denied for scope '{}' trying to update variable '{}' in scope '{}'",
                  self.scope_id, name, scope
             );
