@@ -1,4 +1,3 @@
-use core::processors::{PluginBridge, ScopedRegistry, WorldInfoRegistry};
 use std::{collections::{HashMap, HashSet}, fmt::Debug};
 
 use log::{debug, error, trace};
@@ -9,8 +8,10 @@ pub mod errors;
 pub mod id;
 mod parser;
 mod tests;
+mod registry;
 
 pub use errors::{ParserError, WorldInfoError};
+use registry::{PluginBridge, ScopedRegistry, WorldInfoRegistry};
 
 pub enum ContextNode {
     TextChunk(String),
@@ -108,7 +109,7 @@ impl<P: PluginBridge> WorldInfo<P>{
         if failed {
             Err(&self.error_stack)
         } else {
-            self.trigger_stack = self.processor_registry.activation_stack();
+            self.trigger_stack = self.processor_registry.drain_activation_stack();
             self.evaluate_activation_stack(&mut 0);
             Ok(self.format_output(context))
         }
@@ -185,7 +186,7 @@ impl<P: PluginBridge> WorldInfo<P>{
             }
         }
 
-        self.trigger_stack = self.processor_registry.activation_stack();
+        self.trigger_stack = self.processor_registry.drain_activation_stack();
         
         if failed {
             return;
