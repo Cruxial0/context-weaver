@@ -71,7 +71,7 @@ pub trait ActivationResolver {
 }
 
 pub trait FunctionResolver {
-    fn call_function(&self, name: &str, args: Vec<Value>) -> Result<(), ParserError>;
+    fn call_function(&self, name: &str, args: Vec<Value>) -> Result<Value, ParserError>;
 }
 
 // --- ScopedRegistry Implementations ---
@@ -266,7 +266,7 @@ impl<'a, P: PluginBridge + Debug> ActivationResolver for ScopedRegistry<'a, P> {
 
 // --- FunctionResolver Implementation for ScopedRegistry ---
 impl<'a, P: PluginBridge + Debug> FunctionResolver for ScopedRegistry<'a, P> {
-    fn call_function(&self, name: &str, args: Vec<Value>) -> Result<(), ParserError> {
+    fn call_function(&self, name: &str, args: Vec<Value>) -> Result<Value, ParserError> {
         trace!("ScopedRegistry::call_function: name='{}'", name);
 
         // 1. Look up the function in the inner registry

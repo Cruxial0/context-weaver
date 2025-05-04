@@ -108,7 +108,7 @@ pub struct ParamSignature {
 }
 
 pub trait ModFunction<P : PluginBridge + Debug> {
-    fn call(&self, args: Vec<Value>, registry: &ScopedRegistry<P>) -> Result<(), ParserError>;
+    fn call(&self, args: Vec<Value>, registry: &ScopedRegistry<P>) -> Result<Value, ParserError>;
     
     fn signature(&self) -> (String, Vec<ParamSignature>);
     

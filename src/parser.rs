@@ -1435,9 +1435,14 @@ fn resolve_single_node<P: PluginBridge + Debug>(
             let params = resolve_parameters(parameters, registry, entry_id, loop_context)?;
             trace!("Resolved parameters for mod function '{}': {:?}. Raw tag: {}", name, params, raw_tag);
 
-            registry.call_function(name, params)?;
+            let return_value = registry.call_function(name, params)?;
 
-            Ok(vec![ Box::new(EmptyNode {}) as Box<dyn WorldInfoNode> ])
+            trace!("Successfully called mod function '{}'. Return value: {:?}", name, return_value);
+
+            match return_value {
+                Value::Null => Ok(vec![ Box::new(EmptyNode {}) as Box<dyn WorldInfoNode> ]),
+                v => Ok(vec![ Box::new(TextNode { content: v.to_string() }) as Box<dyn WorldInfoNode> ]) // Literal return value
+            }
         }
         AstNode::Variable { scope, name, .. } => {
             let full_name = format!("{}:{}", scope, name);

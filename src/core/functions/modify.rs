@@ -172,7 +172,7 @@ impl<P: PluginBridge> ModifyFunction<P> {
 }
 
 impl<P: PluginBridge> ModFunction<P> for ModifyFunction<P> {
-    fn call(&self, args: Vec<Value>, registry: &ScopedRegistry<P>) -> Result<(), ParserError>{
+    fn call(&self, args: Vec<Value>, registry: &ScopedRegistry<P>) -> Result<Value, ParserError>{
         let value = &self.signature().1[2];
 
         let var = args[0].as_str().unwrap().to_string().replace("{{", "").replace("}}", "");
@@ -204,7 +204,7 @@ impl<P: PluginBridge> ModFunction<P> for ModifyFunction<P> {
         
         registry.update_variable(&var, new_value)?;
 
-        Ok(())
+        Ok(Value::Null)
     }
 
     fn signature(&self) -> (String, Vec<ParamSignature>) {
