@@ -302,7 +302,10 @@ mod tests {
         let mut worldinfo = WorldInfo::new(Box::new(registry));
         let entry = worldinfo.new_entry("test", 0);
 
-        entry.set_text(r#"@[modify("global:counter", "add", 1)]{{global:counter}}"#);
+        entry.set_text(r#"
+            @[modify("global:counter", "add", 1)]
+            {{global:counter}}
+        "#);
         entry.set_constant(true);
         entry.set_insertion_point("Default".to_string());
 
