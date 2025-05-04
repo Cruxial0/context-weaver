@@ -214,8 +214,8 @@ git clone https://github.com/Cruxial0/context-weaver.git
 
 - ✅ Plugin support  
 - ✅ Various property types  
-- ❌ Global-scoped processors  
-- ❌ Keyword/regex/recursive activation  
+- ❌ Documents ([[DOCUMENT_ID]])
+- ✅ Keyword/regex/recursive activation  
 
 ### Persistence
 
@@ -240,10 +240,11 @@ git clone https://github.com/Cruxial0/context-weaver.git
 | Construct               | Syntax                                  | Supported |
 |-------------------------|-----------------------------------------|-----------|
 | Processor               | `@[processor.name(props)]`              | Yes       |
-| Trigger                 | `<trigger id=…>`                        | Partial   |
+| Trigger                 | `<trigger id=…>`                        | Yes       |
 | If-Macro                | `{# if … #}…{# endif #}`                | Yes       |
-| Foreach-Macro           | `{# foreach … #}…{# endforeach #}`      | No        |
+| Foreach-Macro           | `{# foreach … #}…{# endforeach #}`      | Yes       |
 | Variable mutation       | `@[set]`, `@[modify]`, etc.             | No        |
+| Documents               | `[[DOCUMENT_ID]]`                       | Kinda (no)|
 
 ---
 

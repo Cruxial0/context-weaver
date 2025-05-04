@@ -262,7 +262,7 @@ mod tests {
     fn test_activation_conditions() {
         init();
 
-        let conditions = vec!["TRIGGER", "{{global:trigger}}", "{{global:counter}} == 5", "@[weaver.core.rng(min: 2, max: 10)] > 1", "{{global:counter}} >= 5 && {{global:counter}} < 10"]
+        let conditions = vec!["TRIGGER", "{{global:trigger}}", "{{global:counter}} == 5", "@[weaver.core.rng(min: 2, max: 10)] > 1", "{{global:counter}} >= 5 && {{global:counter}} < 10", "/TRIGGER/gm"]
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
