@@ -21,7 +21,7 @@ processor_end = @{ "]" }
 // Make non-atomic
 trigger = { trigger_start ~ trigger_attributes? ~ trigger_end }
 trigger_start = @{ "<trigger" }
-trigger_attributes = { WHITESPACE+ ~ trigger_attribute ~ (WHITESPACE+ ~ trigger_attribute)* ~ WHITESPACE* }
+trigger_attributes = { WHITESPACE* ~ trigger_attribute ~ (WHITESPACE+ ~ trigger_attribute)* ~ WHITESPACE* }
 trigger_attribute = { trigger_key ~ "=" ~ trigger_value }
 trigger_key = @{ "id" }
 trigger_value = _{ quoted_string }

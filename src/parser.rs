@@ -658,51 +658,92 @@ fn parse_trigger_content<'i, P: PluginBridge + Debug>(
 ) -> Result<AstNode, ParserError> {
     trace!("Parsing trigger content: {:?}", pair.as_str());
     if pair.as_rule() != Rule::trigger {
-        error!("Expected trigger_tag_content, got {:?}", pair.as_rule());
-        return Err(ParserError::Processing(format!("Expected trigger_tag_content, got {:?}", pair.as_rule())));
+        error!("Expected trigger rule, got {:?}", pair.as_rule());
+        return Err(ParserError::Processing(format!("Expected trigger rule, got {:?}", pair.as_rule())));
     }
     let raw_tag_string = pair.as_str().to_string();
-    let mut inner = pair.clone().into_inner();
+    let mut inner = pair.clone().into_inner(); // Inner pairs of the main 'trigger' rule
 
     let _start_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected trigger_start in content".to_string()))?;
 
     let mut trigger_id: Option<String> = None;
 
+    // Check for optional attributes part
     if let Some(attrs_pair) = inner.peek() {
+        // Check if the next pair is trigger_attributes
         if attrs_pair.as_rule() == Rule::trigger_attributes {
-            let consumed_attrs = inner.next().unwrap();
+            let consumed_attrs = inner.next().unwrap(); // Consume the attributes pair
             trace!("Parsing trigger attributes: {:?}", consumed_attrs.as_str());
-            for attr_pair in consumed_attrs.clone().into_inner() {
-                if attr_pair.as_rule() == Rule::trigger_attribute {
-                    let mut attr_inner = attr_pair.clone().into_inner();
-                    let key_pair = attr_inner.next().ok_or_else(|| ParserError::Processing("Trigger attribute missing key".to_string()))?;
-                    let value_pair = attr_inner.next().ok_or_else(|| ParserError::Processing("Trigger attribute missing value".to_string()))?;
 
-                    if key_pair.as_str() == "id" {
-                        let quoted_string_pair = value_pair.into_inner().next()
-                            .ok_or_else(|| ParserError::Processing("Trigger id value missing quoted_string".to_string()))?;
-                        if quoted_string_pair.as_rule() == Rule::quoted_string {
-                            let content = quoted_string_pair.clone().into_inner()
-                                .find(|p| p.as_rule() == Rule::string_content)
-                                .map(|p| p.as_str()).unwrap_or("");
-                            trigger_id = Some(unescape_string(content)?);
-                            trace!("Found trigger id: {:?}", trigger_id);
-                        } else {
-                            error!("Invalid trigger id value type: expected quoted_string, got {:?}", quoted_string_pair.as_rule());
-                            return Err(ParserError::Processing(format!("Invalid trigger id value type: expected quoted_string, got {:?}", quoted_string_pair.as_rule())));
-                        }
+            // Iterate through each attribute inside trigger_attributes
+            // Filter for trigger_attribute rule specifically to ignore potential whitespace etc.
+            for attr_pair in consumed_attrs.clone().into_inner().filter(|p| p.as_rule() == Rule::trigger_attribute) {
+                trace!("Parsing trigger_attribute: {:?}", attr_pair.as_str());
+                let mut attr_inner = attr_pair.clone().into_inner(); // Inner parts of trigger_attribute: key, value
+
+                let key_pair = attr_inner.next().ok_or_else(|| ParserError::Processing(format!("Trigger attribute missing key in '{}'", attr_pair.as_str())))?;
+
+                // Due to the chain of SILENT rules (trigger_value -> quoted_string),
+                // value_pair is expected to be the string_content pair directly.
+                let value_pair = attr_inner.next().ok_or_else(|| ParserError::Processing(format!("Trigger attribute missing value in '{}'", attr_pair.as_str())))?;
+
+                trace!("Attribute key: '{}', value rule: {:?}", key_pair.as_str(), value_pair.as_rule());
+
+                // Check the key rule and its content
+                if key_pair.as_rule() == Rule::trigger_key && key_pair.as_str() == "id" {
+                    // --- Correction Start ---
+                    // Now expect the value pair rule to be string_content
+                    if value_pair.as_rule() == Rule::string_content {
+                        // The value_pair *is* the string_content. It's atomic (@), so get its string value directly.
+                        let content = value_pair.as_str();
+
+                        // Still unescape, as escape sequences might be handled differently by Pest vs string literals.
+                        // Although the string_content rule itself avoids quotes/backslashes needed for JSON escape,
+                        // the escape rule allows \n, \t etc. which might be present.
+                        trigger_id = Some(unescape_string(content)?);
+                        trace!("Found trigger id: \"{}\"", trigger_id.as_ref().unwrap());
                     } else {
-                        warn!("Ignoring unknown trigger attribute: {}", key_pair.as_str());
+                        // This case would mean the grammar parsing produced something unexpected
+                        // for the value part of the id attribute.
+                        error!("Invalid trigger id value type: expected Rule::string_content due to nested silent rules, but got {:?} for value pair '{}'", value_pair.as_rule(), value_pair.as_str());
+                        return Err(ParserError::Processing(format!("Invalid trigger id value type: expected string_content, got {:?}", value_pair.as_rule())));
                     }
+                    // --- Correction End ---
+                } else {
+                    // Handle cases where the key is not "id" or the key rule itself is wrong
+                    warn!("Ignoring attribute with unknown or invalid key '{}' (Rule: {:?})", key_pair.as_str(), key_pair.as_rule());
                 }
             }
+        } else {
+            trace!("No trigger_attributes rule found after trigger_start.");
+            // It's valid to have <trigger> with no attributes if grammar allowed, but ours requires id.
+            // If attributes are optional but ID required, the check later handles it.
         }
+    } else {
+        // This means no trigger_attributes and no trigger_end followed trigger_start
+        trace!("No inner pairs found after trigger_start (missing attributes and end tag).");
+        return Err(ParserError::Processing(format!("Malformed trigger tag '{}': missing attributes or end tag", raw_tag_string)));
     }
 
-    let _end_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected trigger_end in content".to_string()))?;
 
+    // Ensure trigger_end is present and is the next token
+    let end_pair = inner.next().ok_or_else(|| ParserError::Processing(format!("Expected trigger_end after attributes for tag: {}", raw_tag_string)))?;
+    if end_pair.as_rule() != Rule::trigger_end {
+        error!("Expected trigger_end, found {:?} for tag: {}", end_pair.as_rule(), raw_tag_string);
+        return Err(ParserError::Processing(format!("Expected trigger_end, found {:?}", end_pair.as_rule())));
+    }
+
+    // Check if there's anything unexpected after trigger_end within the main trigger rule
+    if inner.next().is_some() {
+        // This might happen if the grammar was like trigger = { start ~ attrs? ~ end ~ WHITESPACE* } and there was trailing space
+        // For the current grammar, this shouldn't happen if the input is valid.
+        warn!("Unexpected content found after trigger_end within trigger rule for tag: {}", raw_tag_string);
+    }
+
+    // Ensure the ID attribute was successfully found and parsed
     let id = trigger_id.ok_or_else(|| {
-        error!("Trigger tag missing 'id' attribute: {}", raw_tag_string);
+        // This error occurs if the loop finished without finding a valid 'id' attribute key/value pair.
+        error!("Trigger tag missing required 'id' attribute or attribute was invalid: {}", raw_tag_string);
         ParserError::MissingTriggerId(raw_tag_string.clone())
     })?;
 

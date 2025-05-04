@@ -1,7 +1,9 @@
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use rand::Rng;
-    use crate::{core::processors::PluginBridge, Context, ContextNode};
+    use crate::{core::processors::{PluginBridge, RngProcessorFactory, WildcardProcessorFactory, WorldInfoRegistry}, id, Context, ContextNode, EntryFactory, ParserError, WorldInfo, WorldInfoEntry, WorldInfoError, WorldInfoFactory};
 
     #[derive(Debug, Clone)]
     struct DummyPluginBridge;
@@ -27,7 +29,7 @@ mod tests {
     static EXAMPLE_INPUT: &str = "This is an example string with meant to serve as an example context. It contains words such as TRIGGER and TRIGGER2. Here is a short story: \"The quick brown fox jumps over the lazy dog.\"";
 
     fn init() {
-        let _ = env_logger::builder().is_test(true).filter_level(log::LevelFilter::Trace).try_init();
+        let _ = env_logger::builder().is_test(true).filter_level(log::LevelFilter::Debug).try_init();
     }
 
     fn example_context() -> Context {
@@ -39,10 +41,6 @@ mod tests {
 
     #[test]
     fn test_parser() {
-        use crate::core::processors::{WildcardProcessorFactory, WorldInfoRegistry, RngProcessorFactory};
-        use crate::{WorldInfo, EntryFactory, WorldInfoFactory};
-        use std::sync::Arc;
-
         init();
 
         let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
@@ -79,10 +77,6 @@ mod tests {
 
     #[test]
     fn test_nested_parser() {
-        use crate::core::processors::{WorldInfoRegistry, WildcardProcessorFactory, RngProcessorFactory};
-        use crate::{WorldInfo, EntryFactory, WorldInfoFactory};
-        use std::sync::Arc;
-
         init();
 
         let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
@@ -118,10 +112,6 @@ mod tests {
 
     #[test]
     fn test_plugin_processor() {
-        use crate::core::processors::WorldInfoRegistry;
-        use crate::{WorldInfo, EntryFactory, WorldInfoFactory,};
-        use std::sync::Arc;
-
         init();
 
         let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
@@ -156,10 +146,6 @@ mod tests {
 
     #[test]
     fn test_variables() {
-        use crate::core::processors::WorldInfoRegistry;
-        use crate::{WorldInfo, EntryFactory, WorldInfoFactory};
-        use std::sync::Arc;
-
         init();
 
         let mut registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
@@ -182,11 +168,7 @@ mod tests {
     }
     
     #[test]
-    fn test_if_macro() {
-        use crate::core::processors::{WorldInfoRegistry, RngProcessorFactory};
-        use crate::{WorldInfo, EntryFactory, WorldInfoFactory};
-        use std::sync::Arc;
-        
+    fn test_if_macro() {      
         init();
 
         let mut registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
@@ -224,10 +206,6 @@ mod tests {
 
     #[test]
     fn test_foreach_macro() {
-        use crate::core::processors::{WorldInfoRegistry, RngProcessorFactory};
-        use crate::{WorldInfo, EntryFactory, WorldInfoFactory};
-        use std::sync::Arc;
-
         init();
 
         let mut registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
@@ -251,18 +229,13 @@ mod tests {
 
         let evaluated_result = worldinfo.evaluate(example_context()).unwrap();
         let result = format!("{}\nThe item is 10!The item is 15!The item is 20!The item is 25!The item is 30!", context.text());
-        println!("Evaluated result: {}", evaluated_result);
+        println!("Evaluated result: {{\n{}\n}}", evaluated_result);
 
         assert_eq!(evaluated_result, result);
     }
 
     #[test]
     fn test_invalid_processor() {
-        use crate::{ParserError, WorldInfoError};
-        use crate::core::processors::WorldInfoRegistry;
-        use crate::{WorldInfo, EntryFactory, WorldInfoFactory};
-        use std::sync::Arc;
-
         init();
 
         let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
@@ -287,10 +260,6 @@ mod tests {
 
     #[test]
     fn test_activation_conditions() {
-        use crate::core::processors::{WorldInfoRegistry, RngProcessorFactory};
-        use crate::{WorldInfo, EntryFactory, WorldInfoFactory};
-        use std::sync::Arc;
-
         init();
 
         let conditions = vec!["TRIGGER", "{{global:trigger}}", "{{global:counter}} == 5", "@[weaver.core.rng(min: 2, max: 10)] > 1", "{{global:counter}} >= 5 && {{global:counter}} < 10"]
@@ -317,9 +286,45 @@ mod tests {
 
             let evaluated_result = worldinfo.evaluate(example_context()).unwrap();
             let possible_results = format!("{}\nWe have reached this point!", context.text());
-            println!("Evaluated result: {}", evaluated_result);
+            println!("Evaluated result: {{\n{}\n}}", evaluated_result);
 
             assert_eq!(evaluated_result, possible_results);
         }
+    }
+
+    #[test]
+    fn test_trigger_activation() {
+        init();
+
+        let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
+
+        let id_generator = id::IdGenerator::new(6);
+        let id_1 = id_generator.generate(); 
+        let id_2 = id_generator.generate();
+
+        // Entry 1: statically triggered, contains a trigger for Entry 2
+        let mut entry = WorldInfoEntry::new("test1".to_string(), id_1, 0);
+        entry.set_text(&format!(r#"This is a test containing a trigger <trigger id="{}">"#, id_2));
+        entry.set_constant(true);
+        entry.set_insertion_point("Default".to_string());
+
+        // Entry 2: triggered by the trigger in Entry 1
+        let mut entry2 = WorldInfoEntry::new("test2".to_string(), id_2, 1);
+        entry2.set_text("Entry 2 was triggered!");
+        entry2.set_insertion_point("Default".to_string());
+
+        let mut worldinfo = WorldInfo::new(Box::new(registry));
+        worldinfo.insert_entry(entry);
+        worldinfo.insert_entry(entry2);
+
+        let context = example_context();
+
+        let evaluated_result = worldinfo.evaluate(example_context()).unwrap();
+
+        println!("Evaluated result: {{\n{}\n}}", evaluated_result);
+
+        let result = format!("{}\nThis is a test containing a trigger \nEntry 2 was triggered!", context.text());
+        assert_eq!(evaluated_result, result);
+
     }
 }
