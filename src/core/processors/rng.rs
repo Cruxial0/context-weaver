@@ -2,14 +2,14 @@ use std::sync::Arc;
 
 use rand::Rng;
 
-use crate::{types::Number, WorldInfoNode, WorldInfoProcessor};
+use crate::{WorldInfoNode, WorldInfoProcessor};
 
 use super::{PluginBridge, WorldInfoProcessorFactory};
 
 #[derive(Debug, Clone)]
 pub struct RngProcessor {
-    min: Number,
-    max: Number,
+    min: serde_json::Number,
+    max: serde_json::Number,
     decimals: bool
 }
 
@@ -32,10 +32,10 @@ impl WorldInfoProcessor for RngProcessor {
         let mut rng = rand::rng();
 
         if self.decimals {
-            Ok(rng.random_range(self.min.as_f64()..self.max.as_f64()).to_string())
+            Ok(rng.random_range(self.min.as_f64().unwrap()..self.max.as_f64().unwrap()).to_string())
         } else {
-            let min = self.min.as_f64().round() as i64;
-            let max = self.max.as_f64().round() as i64;
+            let min = self.min.as_i64().unwrap();
+            let max = self.max.as_i64().unwrap();
             Ok(rng.random_range(min..max).to_string())
         }
     }
@@ -45,38 +45,39 @@ pub struct RngProcessorFactory;
 
 impl<P: PluginBridge + 'static> WorldInfoProcessorFactory<P> for RngProcessorFactory {
     fn create(&self, properties: &serde_json::Value, _bridge: &Arc<P>) -> Box<dyn WorldInfoProcessor> {
-        let raw_min: crate::WorldInfoType = properties["min"].clone().into();
-        let raw_max: crate::WorldInfoType = properties["max"].clone().into();
-        let raw_decimal: crate::WorldInfoType = properties["decimal"].clone().into();
+        log::trace!("Creating rng processor");
+        let raw_min = properties["min"].clone();
+        let raw_max = properties["max"].clone();
+        let raw_decimal = properties["decimals"].clone();
 
         let min = match raw_min {
-            crate::WorldInfoType::Number(n) => n,
-            crate::WorldInfoType::String(s) => parse_number(&s).unwrap_or(Number::Int(0)),
-            _ => Number::Int(0),
+            serde_json::Value::Number(number) => number,
+            serde_json::Value::String(s) => parse_number(&s).unwrap(),
+            _ => 0.into()
         };
 
         let max = match raw_max {
-            crate::WorldInfoType::Number(n) => n,
-            crate::WorldInfoType::String(s) => parse_number(&s).unwrap_or(Number::Int(100)),
-            _ => Number::Int(100),
+            serde_json::Value::Number(number) => number,
+            serde_json::Value::String(s) => parse_number(&s).unwrap(),
+            _ => 100.into()
         };
 
         let decimals = match raw_decimal {
-            crate::WorldInfoType::Boolean(b) => b,
-            _ => false,
+            serde_json::Value::Bool(b) => b,
+            _ => false
         };
 
         Box::new(RngProcessor { min, max, decimals })
     }
 }
 
-fn parse_number(s: &str) -> Option<Number> {
+fn parse_number(s: &str) -> Option<serde_json::Number> {
     if let Ok(i) = s.parse::<i64>() {
-        Some(Number::Int(i))
+        Some(serde_json::Number::from(i))
     } else if let Ok(u) = s.parse::<u64>() {
-        Some(Number::UInt(u))
+        Some(serde_json::Number::from(u))
     } else if let Ok(f) = s.parse::<f64>() {
-        Some(Number::Float(f))
+        Some(serde_json::Number::from_f64(f).unwrap())
     } else {
         None
     }

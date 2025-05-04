@@ -4,10 +4,13 @@ authors = ["Cruxial"]
 description = "(WIP) A procedural text evaluation engine"
 repository = "https://github.com/Cruxial0/context-weaver"
 license = "MIT"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 
 [dependencies]
+env_logger = "0.11.8"
+lazy_static = "1.5.0"
+log = "0.4.27"
 once_cell = "1.21.3"
 pest = "2.8.0"
 pest_derive = "2.8.0"

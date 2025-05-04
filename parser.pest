@@ -1,54 +1,152 @@
+// Grammar for parsing text with embedded processors, triggers, variables, macros, and activation conditions.
+
+// --- Entry Point & Basic Structure ---
+input = { SOI ~ (macro_tag | processor | trigger | variable | text | WHITESPACE)* ~ EOI }
+cond_input = { SOI ~ condition ~ EOI }
+
+// --- Whitespace and Comments (ignored in most places via `_`) ---
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
-COMMENT = _{ "//" ~ (!"\n" ~ ANY)* } // Example: Allow // comments if needed
 
-input = { SOI ~ (text | processor_tag | trigger_tag)* ~ EOI }
-text = @{ (!(processor_start | trigger_start) ~ ANY)+ }
+// --- Text Node ---
+text = @{ (!("@[" | "<trigger" | "{{" | "{#") ~ ANY)+ }
 
-// == Processor Tag: @[name(properties)] ==
-processor_start = { "@[" }
-processor_tag = { processor_start ~ processor_name ~ "(" ~ properties? ~ ")" ~ "]" }
-processor_name = @{ (ASCII_ALPHANUMERIC | "." | "_")+ }
+// --- Unified Processor Tag ---
+// Make non-atomic so AST builder can see inner parts
+processor = { processor_start ~ processor_name ~ ( "(" ~ properties? ~ ")" )? ~ processor_end }
+processor_start = @{ "@[" }
+processor_name = @{ identifier ~ ("." ~ identifier)* }
+processor_end = @{ "]" }
 
-// == Trigger Tag: <trigger id=...> ==
-trigger_start = { "<trigger" }
-trigger_tag = { trigger_start ~ trigger_attributes? ~ ">" }
-trigger_attributes = { trigger_attribute+ }
-trigger_attribute = { attribute_key ~ "=" ~ attribute_value }
-attribute_key = @{ ASCII_ALPHANUMERIC+ }
-attribute_value = @{ "\"" ~ ( !"\"" ~ ANY )* ~ "\"" | "'" ~ ( !"'" ~ ANY )* ~ "'" | (!(">" | WHITESPACE) ~ ANY)+ }
+// --- Unified Trigger Tag ---
+// Make non-atomic
+trigger = { trigger_start ~ trigger_attributes? ~ trigger_end }
+trigger_start = @{ "<trigger" }
+trigger_attributes = { WHITESPACE* ~ trigger_attribute ~ (WHITESPACE+ ~ trigger_attribute)* ~ WHITESPACE* }
+trigger_attribute = { trigger_key ~ "=" ~ trigger_value }
+trigger_key = @{ "id" }
+trigger_value = _{ quoted_string }
+trigger_end = @{ ">" }
 
-// == Properties (Pseudo-JSON, used everywhere) ==
-properties = { property ~ ("," ~ property)* }
-property = { property_key ~ ":" ~ property_value }
-// Keys are unquoted identifiers
-property_key = @{ (ASCII_ALPHANUMERIC | "_")+ } // Allow underscore
+// --- Unified Scoped Variable ---
+// Make non-atomic
+variable = { variable_start ~ scope ~ variable_separator ~ name ~ variable_end }
+variable_start = @{ "{{" }
+scope = @{ identifier }
+variable_separator = @{ ":" }
+name = @{ identifier }
+variable_end = @{ "}}" }
 
-// Value can be various types, including nested objects/arrays using the SAME property rules
-// `property_value` itself is silent, meaning the parser yields the token matched by one of the options inside.
-property_value = _{
-    processor_tag | // Nested processor evaluation
-    string |
-    number |
-    boolean |
-    object |        // <<<< Generic object rule (uses `properties`)
-    array  |        // <<<< Generic array rule (uses `property_value`)
-    null            // <<<< Added null
+
+// --- Macros: {# if ... #}, {# foreach ... #} ---
+macro_tag = { ( macro_foreach | macro_if ) } // Keep this choice
+
+// If Macro: {# if condition #} ... {# else #} ... {# endif #}
+macro_if = { macro_if_start ~ expression ~ macro_tag_end ~ inner_nodes ~ macro_else? ~ macro_endif }
+macro_if_start = @{ macro_tag_start ~ "if" ~ WHITESPACE+ }
+macro_else = { macro_else_tag ~ inner_nodes }
+macro_else_tag = @{ "{# else #}" }
+macro_endif = @{ "{# endif #}" }
+
+// Foreach Macro: {# foreach item in collection #} ... {# endforeach #}
+macro_foreach = { macro_foreach_start ~ identifier ~ WHITESPACE* ~ "in" ~ WHITESPACE* ~ expression ~ macro_tag_end ~ inner_nodes ~ macro_endforeach }
+macro_foreach_start = @{ macro_tag_start ~ "foreach" ~ WHITESPACE+ }
+macro_endforeach = @{ "{# endforeach #}" }
+
+macro_tag_start = @{ "{#" ~ WHITESPACE* }
+macro_tag_end = @{ WHITESPACE* ~ "#}" }
+
+// Add a rule for iterator references in foreach loops
+iterator_reference = { "{{" ~ identifier ~ "}}" }
+
+// Update inner_nodes to use the unified rules
+inner_nodes = { (macro_tag | processor | trigger | variable | iterator_reference | text)* }
+
+// --- Activation Condition Rules ---
+// Main condition rule that handles all types of activation conditions
+condition = { comparison_condition | regex_condition | keyword_condition }
+
+// Simple keyword (equivalent to /KEYWORD/gm)
+keyword_condition = { variable | processor | simple_keyword }
+
+// Simple keyword: sequence of non-whitespace, non-comma, non-special-start chars
+// This rule is atomic (@) because we just want its string content directly.
+simple_keyword = @{ (!(WHITESPACE | "," | "/" | "{{" | "@[" | "<trigger" | "{#") ~ ANY)+ }
+
+// Custom regex pattern
+regex_condition = { "/" ~ regex_pattern ~ "/" ~ regex_flags? }
+// Make regex_pattern non-atomic and allow inner elements
+regex_pattern = { (escape | variable | processor | text_in_regex )+ } // Allow var/proc/text inside, disallow '/' and '\n' implicitly via text_in_regex
+regex_flags = @{ ASCII_ALPHA+ }
+
+// Comparison conditions (involving variables, processors, etc.)
+comparison_condition = { expression }
+
+// --- Expressions (Enhanced for Arithmetic, Comparisons, and Logic) ---
+// Use Pest's built-in precedence climber
+expression = {
+    logical_or  // Lowest precedence
 }
 
-// Generic Object (uses the main 'properties' rule with unquoted keys)
-object = { "{" ~ properties? ~ "}" } // <<<< Contains optional 'properties'
+// Define operator precedence levels (from lowest to highest)
+logical_or = { logical_and ~ ( or_op ~ logical_and )* }
+logical_and = { comparison ~ ( and_op ~ comparison )* }
+comparison = { addition_subtraction ~ ( comp_op ~ addition_subtraction )* } // Compare results of arithmetic
+addition_subtraction = { multiplication_division ~ ( (add_op | sub_op) ~ multiplication_division )* } // +/- have same precedence
+multiplication_division = { unary_prefix ~ ( (mul_op | div_op) ~ unary_prefix )* } // * / have same precedence, higher than +/-
+unary_prefix = { not_op ~ unary_prefix | term } // Unary prefix has high precedence
 
-// Generic Array (elements are 'property_value')
-array = { "[" ~ (property_value ~ ("," ~ property_value)*)? ~ "]" }
+// Basic term: literals, variables, processors, or grouped expressions
+// Restore silent whitespace '_'
+term = _{ literal | variable | processor | "(" ~ expression ~ ")" }
+
+// Operator Rules
+comp_op = @{ "==" | "!=" | "<=" | ">=" | "<" | ">" }
+and_op = @{ "&&" }
+or_op = @{ "||" }
+add_op = @{ "+" }
+sub_op = @{ "-" }
+mul_op = @{ "*" }
+div_op = @{ "/" }
+not_op = @{ "!" }
+
+// --- Properties for Processors (Pseudo-JSON) ---
+properties = { property ~ (WHITESPACE* ~ "," ~ WHITESPACE* ~ property)* ~ WHITESPACE* }
+property = { property_key ~ WHITESPACE* ~ ":" ~ WHITESPACE* ~ property_value }
+property_key = @{ identifier | quoted_string }
+// Update property_value to use the unified rules
+// Restore silent whitespace '_'
+property_value = _{
+    processor // Use unified processor rule
+    | variable  // Use unified variable rule
+    | iterator_reference
+    | object
+    | array
+    | literal   // Allow simple literals directly
+}
+
+// --- Literals ---
+literal = _{ string | number | boolean | null }
+string = _{ quoted_string }
+number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ (^"e" | ^"E")? ~ ("+" | "-")? ~ ASCII_DIGIT* }
+boolean = @{ "true" | "false" }
 null = @{ "null" }
 
-// == Basic Value Types == (shared)
-string = @{ "\"" ~ inner ~ "\"" }
-inner = { (escape | !("\"" | "\\") ~ ANY)* }
-escape = { "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t" | unicode) }
-unicode = { "u" ~ HEX_DIGIT{4} }
-number = @{ "-"? ~ int ~ ("." ~ ASCII_DIGIT+)? ~ (^"e" ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
-int = { "0" | ASCII_NONZERO_DIGIT ~ ASCII_DIGIT* }
-boolean = @{ "true" | "false" }
+// --- Reusable Primitives ---
+identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")*? }
+quoted_string = _{ "\"" ~ string_content? ~ "\"" }
+string_content = @{ (escape | !("\"" | "\\") ~ ANY)+ }
+escape = { "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t" | "u" ~ ASCII_HEX_DIGIT{4}) }
 
-// PEST built-ins assumed: SOI, EOI, ANY, ASCII_ALPHANUMERIC, ASCII_DIGIT, ASCII_NONZERO_DIGIT, HEX_DIGIT
+// Helper for plain text specifically within regex patterns
+// It stops at delimiters like /, \n, \, {{, @[
+text_in_regex = @{ (!("/" | "\n" | "\\" | "{{" | "@[") ~ ANY)+ }
+
+// --- Object and Array (Pseudo-JSON within properties) ---
+object = { "{" ~ WHITESPACE* ~ properties? ~ WHITESPACE* ~ "}" }
+array = { "[" ~ WHITESPACE* ~ (property_value ~ (WHITESPACE* ~ "," ~ WHITESPACE* ~ property_value)*)? ~ WHITESPACE* ~ "]" }
+
+// --- Character Classes ---
+ASCII_ALPHA = _{ 'a'..'z' | 'A'..'Z' }
+ASCII_DIGIT = _{ '0'..'9' }
+ASCII_HEX_DIGIT = _{ '0'..'9' | 'a'..'f' | 'A'..'F' }
+ASCII_ALPHANUMERIC = _{ ASCII_ALPHA | ASCII_DIGIT }
