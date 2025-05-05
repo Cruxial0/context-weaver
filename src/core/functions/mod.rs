@@ -7,6 +7,7 @@ use crate::registry::{PluginBridge, ScopedRegistry};
 use crate::ParserError;
 
 pub mod modify;
+pub mod pretty_print;
 
 pub use modify::ModifyFunction;
 
