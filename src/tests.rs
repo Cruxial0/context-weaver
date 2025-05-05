@@ -48,7 +48,7 @@ mod tests {
         registry.register_processor("weaver.core.wildcard", Box::new(WildcardProcessorFactory));
         registry.register_processor("weaver.core.rng", Box::new(RngProcessorFactory));
         //let input = r#"Today's weather is @[weaver.core.wildcard(items: ["sunny", "cloudy", "rainy"], test: 100)]!"#;
-        let input = r#"The generated number is @[weaver.core.rng(min: 0, max: 100)]!, Today's weather is @[weaver.core.wildcard(items: ["sunny", "cloudy", "rainy"])]!"#;
+        let input = r#"The generated number is @![weaver.core.rng(min: 0, max: 100)]!, Today's weather is @![weaver.core.wildcard(items: ["sunny", "cloudy", "rainy"])]!"#;
 
         let mut worldinfo = WorldInfo::new(Box::new(registry));
 
@@ -84,7 +84,7 @@ mod tests {
         registry.register_processor("weaver.core.wildcard", Box::new(WildcardProcessorFactory));
         registry.register_processor("weaver.core.rng", Box::new(RngProcessorFactory));
         
-        let input = r#"Today's weather is @[weaver.core.wildcard(items: ["sunny", "cloudy", "random: @[weaver.core.rng(min: 0, max: 100)]"])]!"#;
+        let input = r#"Today's weather is @![weaver.core.wildcard(items: ["sunny", "cloudy", "random: @![weaver.core.rng(min: 0, max: 100)]"])]!"#;
 
         let mut worldinfo = WorldInfo::new(Box::new(registry));
         let entry = worldinfo.new_entry("test", 0);
@@ -117,7 +117,7 @@ mod tests {
 
         let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
         registry.register_plugin_processor("dummy", "test");
-        let input = r#"@[weaver.plugin.dummy.test(
+        let input = r#"@![weaver.plugin.dummy.test(
             plugin_author: "dummy", 
             plugin_name: "test", 
             plugin_id: 0, 
@@ -178,7 +178,7 @@ mod tests {
         registry.register_variable("global:counter".to_string(), 0.into());
 
         let input = r#"
-            {# if {{global:test}} == true && (true == true && {{global:counter}} + @[weaver.core.rng(min: 0, max: 10)] > 5) #}
+            {# if {{global:test}} == true && (true == true && {{global:counter}} + @![weaver.core.rng(min: 0, max: 10)] > 5) #}
                 The prophecy is true!
             {# else #}
                 The prophecy is but a mere hoax!
@@ -241,7 +241,7 @@ mod tests {
 
         let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
 
-        let input = r#"@[weaver.core.wildcard(invalid: true)]"#;
+        let input = r#"@![weaver.core.wildcard(invalid: true)]"#;
 
         let mut worldinfo = WorldInfo::new(Box::new(registry));
         let entry = worldinfo.new_entry("test", 0);
@@ -263,7 +263,7 @@ mod tests {
     fn test_activation_conditions() {
         init();
 
-        let conditions = vec!["TRIGGER", "{{global:trigger}}", "{{global:counter}} == 5", "@[weaver.core.rng(min: 2, max: 10)] > 1", "{{global:counter}} >= 5 && {{global:counter}} < 10", "/TRIGGER/gm"]
+        let conditions = vec!["TRIGGER", "{{global:trigger}}", "{{global:counter}} == 5", "@![weaver.core.rng(min: 2, max: 10)] > 1", "{{global:counter}} >= 5 && {{global:counter}} < 10", "/TRIGGER/gm"]
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<String>>();

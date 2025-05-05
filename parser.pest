@@ -8,17 +8,17 @@ cond_input = { SOI ~ condition ~ EOI }
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 
 // --- Text Node ---
-text = @{ (!("@[" | "<trigger" | "{{" | "{#") ~ ANY)+ }
+text = @{ (!("@[" | "@![" | "<trigger" | "{{" | "{#") ~ ANY)+ }
 
 // --- Unified Processor Tag ---
 // Make non-atomic so AST builder can see inner parts
-processor = { processor_start ~ processor_name ~ ( "(" ~ properties? ~ ")" )? ~ processor_end }
-processor_start = @{ "@[" }
-processor_name = @{ identifier ~ ("." ~ identifier)* }
+processor = { processor_start ~ namespace_identifier ~ ( "(" ~ properties? ~ ")" )? ~ processor_end }
+processor_start = @{ "@![" }
 processor_end = @{ "]" }
 
 // Internal Functions
-mod_function = { processor_start ~ identifier ~ "(" ~ parameters ~ ")" ~ processor_end }
+mod_function_start = @{ "@[" }
+mod_function = { mod_function_start ~ namespace_identifier ~ "(" ~ parameters ~ ")" ~ processor_end }
 
 // --- Unified Trigger Tag ---
 // Make non-atomic
@@ -140,6 +140,7 @@ null = @{ "null" }
 
 // --- Reusable Primitives ---
 identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")*? }
+namespace_identifier = @{ identifier ~ ("." ~ identifier)* }
 quoted_string = _{ "\"" ~ string_content? ~ "\"" }
 string_content = @{ (escape | !("\"" | "\\") ~ ANY)+ }
 escape = { "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t" | "u" ~ ASCII_HEX_DIGIT{4}) }

@@ -630,7 +630,7 @@ fn parse_mod_function_content<'i, P: PluginBridge + Debug>(
 
     let _start_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected mod_start in content".to_string()))?;
     let name_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected mod_name in content".to_string()))?;
-    if name_pair.as_rule() != Rule::identifier {
+    if name_pair.as_rule() != Rule::namespace_identifier {
         error!("Expected mod_name, got {:?}", name_pair.as_rule());
         return Err(ParserError::Processing(format!("Expected mod_name, got {:?}", name_pair.as_rule())));
     }
@@ -703,7 +703,7 @@ fn parse_processor_content<'i, P: PluginBridge + Debug>(
 
     let _start_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected processor_start in content".to_string()))?;
     let name_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected processor_name in content".to_string()))?;
-    if name_pair.as_rule() != Rule::processor_name {
+    if name_pair.as_rule() != Rule::namespace_identifier {
         error!("Expected processor_name, got {:?}", name_pair.as_rule());
         return Err(ParserError::Processing(format!("Expected processor_name, got {:?}", name_pair.as_rule())));
     }
@@ -1092,7 +1092,7 @@ fn parse_atomic_processor(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
         return Err(ParserError::Processing(format!("Expected atomic processor_tag rule, got {:?}", pair.as_rule())));
     }
     let raw_tag = pair.as_str().to_string();
-    let content = raw_tag.trim_start_matches("@[")
+    let content = raw_tag.trim_start_matches("@![")
                             .trim_end_matches(']');
 
     let (name_str, props_str_opt) = match content.find('(') {
@@ -1667,7 +1667,7 @@ fn resolve_property_value_to_json<P: PluginBridge + Debug>(
             trace!("Resolving NestedValue within property: {:?}", v);
             if let Value::String(s) = v {
                 // Check if the string itself contains tags that need evaluation
-                if s.contains("@[") || s.contains("<trigger") || s.contains("{{") || s.contains("{#") {
+                if s.contains("@[") || s.contains("@![") || s.contains("<trigger") || s.contains("{{") || s.contains("{#") {
                     debug!("String literal contains tags, re-parsing/evaluating: {:?}", s);
                     // Re-parse the string content as if it were top-level input
                     let inner_resolved_nodes = parse_and_evaluate(s, registry, entry_id, loop_context)?;
@@ -1753,8 +1753,8 @@ fn evaluate_expression<P: PluginBridge + Debug>(
 
             let processor_instance = registry.instantiate_processor(name, &resolved_props)
             .ok_or_else(|| {
-                 error!("Processor instantiation failed during expression evaluation for '{}' with props {:?}. Raw tag: {}", name, resolved_props, raw_tag);
-                 ParserError::ProcessorInstantiation( name.clone(),
+                error!("Processor instantiation failed during expression evaluation for '{}' with props {:?}. Raw tag: {}", name, resolved_props, raw_tag);
+                ParserError::ProcessorInstantiation( name.clone(),
                     format!("Processor '{}' not found or instantiation failed during expression evaluation (props: {:?})", name, resolved_props),
                 )
             })?;
