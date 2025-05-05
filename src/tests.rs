@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::sync::Arc;
 
     use rand::Rng;
     use serde_json::json;
@@ -300,12 +300,12 @@ mod tests {
         let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
         registry.register_variable("global:counter".to_string(), 0.into());
         registry.register_variable("global:object1".to_string(), json!({"key1": "value1"}).into());
-        registry.register_variable("global:object2".to_string(), json!({"key2": "value2"}).into());
 
         let mut worldinfo = WorldInfo::new(Box::new(registry));
         let entry = worldinfo.new_entry("test", 0);
 
         entry.set_text(r#"
+            @[set("global:object2", {"key2": "value2"})]
             @[modify("global:object1", "merge", {{global:object2}})]
             @[modify("global:counter", "add", 1)]
             {{global:counter}}: {{global:object1}}

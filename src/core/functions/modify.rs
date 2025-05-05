@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use serde_json::{Map, Number, Value};
 
 use crate::{registry::{PluginBridge, ScopedRegistry, VariableResolver}, ParserError};

@@ -9,7 +9,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::{
-    core::{functions::{pretty_print::PrettyPrintFunction, ModFunction, ModifyFunction}, processors::plugin}, ParserError, WorldInfoError, WorldInfoNode
+    core::{functions::{pretty_print::PrettyPrintFunction, ModFunction, ModifyFunction, VariableSetFunction}, processors::plugin}, ParserError, WorldInfoError, WorldInfoNode
 };
 
 // --- PluginBridge Trait ---
@@ -392,5 +392,6 @@ fn load_functions<P: PluginBridge + 'static>() -> HashMap<String, Arc<dyn ModFun
     let mut functions = HashMap::new();
     functions.insert("modify".to_string(), Arc::new(ModifyFunction::new()) as Arc<dyn ModFunction<P>>);
     functions.insert("pretty_print".to_string(), Arc::new(PrettyPrintFunction::new()) as Arc<dyn ModFunction<P>>);
+    functions.insert("set".to_string(), Arc::new(VariableSetFunction::new()) as Arc<dyn ModFunction<P>>);
     functions
 }

@@ -8,8 +8,11 @@ use crate::ParserError;
 
 pub mod modify;
 pub mod pretty_print;
+pub mod set;
 
 pub use modify::ModifyFunction;
+pub use pretty_print::PrettyPrintFunction;
+pub use set::VariableSetFunction;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParamType {
@@ -100,6 +103,13 @@ impl ParamType {
             }
         }
     }
+
+    pub fn is_optional(&self) -> bool {
+        match self {
+            ParamType::Optional(_) => true,
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Display for ParamType {
@@ -138,8 +148,9 @@ pub trait ModFunction<P : PluginBridge + Debug> {
         trace!("ModFunction::validate_args({:?})", args);
         let (_, params) = self.signature();
         
-        if args.len() != params.len() {
-            return Err(format!("Expected {} arguments, got {}", params.len(), args.len()));
+        let min_args = params.iter().filter(|p| !p.param_type.is_optional()).count();
+        if args.len() < min_args || args.len() > params.len() {
+            return Err(format!("Expected at least {} arguments", min_args));
         }
         
         for (i, (arg, param)) in args.iter().zip(params.iter()).enumerate() {
