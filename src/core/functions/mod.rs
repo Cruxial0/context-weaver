@@ -20,7 +20,8 @@ pub enum ParamType {
     Object,
     Null,
     All,
-    Any(Vec<ParamType>)
+    Any(Vec<ParamType>),
+    Optional(Option<Box<ParamType>>),
 }
 
 impl ParamType {
@@ -65,6 +66,14 @@ impl ParamType {
                 // No matching type found
                 None
             },
+
+            // If this is Optional, check the inner type
+            ParamType::Optional(inner) => {
+                match inner {
+                    Some(i) => i.concrete_type_for(value),
+                    None => Some(ParamType::All),
+                }
+            }
             
             // This is a concrete type but it doesn't match
             _ => None,
@@ -83,6 +92,12 @@ impl ParamType {
             ParamType::Null => value.is_null(),
             ParamType::All => true,
             ParamType::Any(types) => types.iter().any(|t| t.matches(value)),
+            ParamType::Optional(inner) => {
+                match inner {
+                    Some(i) => i.matches(value),
+                    None => true,
+                }
+            }
         }
     }
 }
@@ -98,6 +113,12 @@ impl fmt::Display for ParamType {
             ParamType::Null => write!(f, "Null"),
             ParamType::All => write!(f, "Any"),
             ParamType::Any(types) => write!(f, "Any({})", types.iter().map(|t| format!("{}", t)).collect::<Vec<String>>().join(", ")),
+            ParamType::Optional(inner) => {
+                match inner {
+                    Some(i) => write!(f, "Optional({})", i),
+                    None => write!(f, "Optional(None)"),
+                }
+            }
         }
     }
 }
