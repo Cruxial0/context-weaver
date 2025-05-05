@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use crate::{WorldInfoNode, WorldInfoProcessor};
-
-use super::{WorldInfoProcessorFactory, PluginBridge};
+use crate::{registry::{PluginBridge, WorldInfoProcessorFactory}, WorldInfoNode, WorldInfoProcessor};
 
 /// Processor for loading plugins
 /// 
@@ -43,7 +41,7 @@ impl<'a, P: PluginBridge> WorldInfoProcessor for PluginProcessor<'a, P> {
 pub struct PluginProcessorFactory;
 
 impl<P: PluginBridge + 'static> WorldInfoProcessorFactory<P> for PluginProcessorFactory {
-    fn create(&self, properties: &serde_json::Value, bridge: &Arc<P>) -> Box<dyn WorldInfoProcessor> {
+    fn create(&self, properties: &serde_json::Value, bridge: &Arc<P>) -> Box<dyn WorldInfoNode> {
         // parse out your plugin_id, name, author, props…
         let plugin_id     = serde_json::from_value::<P::PluginId>(properties["plugin_id"].clone()).unwrap();
         let plugin_name   = properties["plugin_name"].as_str().unwrap().to_string();

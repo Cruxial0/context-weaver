@@ -3,7 +3,8 @@ mod tests {
     use std::sync::Arc;
 
     use rand::Rng;
-    use crate::{core::processors::{PluginBridge, RngProcessorFactory, WildcardProcessorFactory, WorldInfoRegistry}, id, Context, ContextNode, EntryFactory, ParserError, WorldInfo, WorldInfoEntry, WorldInfoError, WorldInfoFactory};
+    use serde_json::json;
+    use crate::{core::processors::{RngProcessorFactory, WildcardProcessorFactory}, id, registry::{PluginBridge, WorldInfoRegistry}, Context, ContextNode, EntryFactory, ParserError, WorldInfo, WorldInfoEntry, WorldInfoError, WorldInfoFactory};
 
     #[derive(Debug, Clone)]
     struct DummyPluginBridge;
@@ -29,7 +30,7 @@ mod tests {
     static EXAMPLE_INPUT: &str = "This is an example string with meant to serve as an example context. It contains words such as TRIGGER and TRIGGER2. Here is a short story: \"The quick brown fox jumps over the lazy dog.\"";
 
     fn init() {
-        let _ = env_logger::builder().is_test(true).filter_level(log::LevelFilter::Debug).try_init();
+        let _ = env_logger::builder().is_test(true).filter_level(log::LevelFilter::Trace).try_init();
     }
 
     fn example_context() -> Context {
@@ -47,7 +48,7 @@ mod tests {
         registry.register_processor("weaver.core.wildcard", Box::new(WildcardProcessorFactory));
         registry.register_processor("weaver.core.rng", Box::new(RngProcessorFactory));
         //let input = r#"Today's weather is @[weaver.core.wildcard(items: ["sunny", "cloudy", "rainy"], test: 100)]!"#;
-        let input = r#"The generated number is @[weaver.core.rng(min: 0, max: 100)]!, Today's weather is @[weaver.core.wildcard(items: ["sunny", "cloudy", "rainy"])]!"#;
+        let input = r#"The generated number is @![weaver.core.rng(min: 0, max: 100)]!, Today's weather is @![weaver.core.wildcard(items: ["sunny", "cloudy", "rainy"])]!"#;
 
         let mut worldinfo = WorldInfo::new(Box::new(registry));
 
@@ -83,7 +84,7 @@ mod tests {
         registry.register_processor("weaver.core.wildcard", Box::new(WildcardProcessorFactory));
         registry.register_processor("weaver.core.rng", Box::new(RngProcessorFactory));
         
-        let input = r#"Today's weather is @[weaver.core.wildcard(items: ["sunny", "cloudy", "random: @[weaver.core.rng(min: 0, max: 100)]"])]!"#;
+        let input = r#"Today's weather is @![weaver.core.wildcard(items: ["sunny", "cloudy", "random: @![weaver.core.rng(min: 0, max: 100)]"])]!"#;
 
         let mut worldinfo = WorldInfo::new(Box::new(registry));
         let entry = worldinfo.new_entry("test", 0);
@@ -116,7 +117,7 @@ mod tests {
 
         let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
         registry.register_plugin_processor("dummy", "test");
-        let input = r#"@[weaver.plugin.dummy.test(
+        let input = r#"@![weaver.plugin.dummy.test(
             plugin_author: "dummy", 
             plugin_name: "test", 
             plugin_id: 0, 
@@ -148,7 +149,7 @@ mod tests {
     fn test_variables() {
         init();
 
-        let mut registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
+        let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
         registry.register_variable("global:test".to_string(), "test".into());
 
         let input = r#"The variable's contents are "{{global:test}}"!"#;
@@ -171,17 +172,17 @@ mod tests {
     fn test_if_macro() {      
         init();
 
-        let mut registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
+        let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
         registry.register_processor("weaver.core.rng", Box::new(RngProcessorFactory));
         registry.register_variable("global:test".to_string(), true.into());
         registry.register_variable("global:counter".to_string(), 0.into());
 
         let input = r#"
-        {# if {{global:test}} == true && (true == true && {{global:counter}} + @[weaver.core.rng(min: 0, max: 10)] > 5) #}
-            The prophecy is true!
-        {# else #}
-            The prophecy is but a mere hoax!
-        {# endif #}
+            {# if {{global:test}} == true && (true == true && {{global:counter}} + @![weaver.core.rng(min: 0, max: 10)] > 5) #}
+                The prophecy is true!
+            {# else #}
+                The prophecy is but a mere hoax!
+            {# endif #}
         "#;
 
         let mut worldinfo = WorldInfo::new(Box::new(registry));
@@ -208,7 +209,7 @@ mod tests {
     fn test_foreach_macro() {
         init();
 
-        let mut registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
+        let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
         registry.register_processor("weaver.core.rng", Box::new(RngProcessorFactory));
         registry.register_variable("global:array".to_string(), vec![10, 15, 20, 25, 30].into());
 
@@ -240,7 +241,7 @@ mod tests {
 
         let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
 
-        let input = r#"@[weaver.core.wildcard(invalid: true)]"#;
+        let input = r#"@![weaver.core.wildcard(invalid: true)]"#;
 
         let mut worldinfo = WorldInfo::new(Box::new(registry));
         let entry = worldinfo.new_entry("test", 0);
@@ -262,13 +263,13 @@ mod tests {
     fn test_activation_conditions() {
         init();
 
-        let conditions = vec!["TRIGGER", "{{global:trigger}}", "{{global:counter}} == 5", "@[weaver.core.rng(min: 2, max: 10)] > 1", "{{global:counter}} >= 5 && {{global:counter}} < 10", "/TRIGGER/gm"]
+        let conditions = vec!["TRIGGER", "{{global:trigger}}", "{{global:counter}} == 5", "@![weaver.core.rng(min: 2, max: 10)] > 1", "{{global:counter}} >= 5 && {{global:counter}} < 10", "/TRIGGER/gm"]
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
 
         for cond in conditions {
-            let mut registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
+            let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
             registry.register_processor("weaver.core.rng", Box::new(RngProcessorFactory));
             registry.register_variable("global:trigger".to_string(), true.into());
             registry.register_variable("global:counter".to_string(), 5.into());
@@ -290,6 +291,34 @@ mod tests {
 
             assert_eq!(evaluated_result, possible_results);
         }
+    }
+
+    #[test]
+    fn test_modifier_function() {
+        init();
+
+        let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
+        registry.register_variable("global:counter".to_string(), 0.into());
+        registry.register_variable("global:object1".to_string(), json!({"key1": "value1"}).into());
+
+        let mut worldinfo = WorldInfo::new(Box::new(registry));
+        let entry = worldinfo.new_entry("test", 0);
+
+        entry.set_text(r#"
+            @[set("global:object2", {"key2": "value2"})]
+            @[modify("global:object1", "merge", {{global:object2}})]
+            @[modify("global:counter", "add", 1)]
+            {{global:counter}}: {{global:object1}}
+        "#);
+        entry.set_constant(true);
+        entry.set_insertion_point("Default".to_string());
+
+        let context = example_context();
+        let evaluated_result = worldinfo.evaluate(example_context()).unwrap();
+        let possible_results = format!("{}\n{}", context.text(), r#"1: {"key1":"value1","key2":"value2"}"#);
+        println!("Evaluated result: {{\n{}\n}}", evaluated_result);
+
+        assert_eq!(evaluated_result, possible_results);
     }
 
     #[test]

@@ -3,9 +3,10 @@
 use crate::core::nodes::empty::EmptyNode;
 // --- Crates ---
 use crate::core::nodes::{TextNode, VariableNode};
-use crate::core::processors::{ActivationResolver, PluginBridge, ScopedRegistry, VariableResolver};
 use crate::errors::ParserError;
-use crate::WorldInfoNode; // Placeholder imports
+use crate::registry::{ActivationResolver, FunctionResolver, PluginBridge, ScopedRegistry, VariableResolver};
+use crate::WorldInfoNode;
+// Placeholder imports
 use pest::iterators::{Pair, Pairs};
 use pest::Parser;
 use pest_derive::Parser;
@@ -48,6 +49,7 @@ pub enum BinaryOperator {
 pub enum AstNode {
     Text(String),
     Processor { name: String, properties: Vec<(String, AstNode)>, raw_tag: String },
+    ModFunction { name: String, parameters: Vec<AstNode>, raw_tag: String },
     Trigger { id: String, _raw_tag: String },
     Variable { scope: String, name: String, _raw_tag: String },
     MacroIf { condition: Box<Expression>, then_branch: Vec<AstNode>, else_branch: Option<Vec<AstNode>>, raw_tag: String },
@@ -553,6 +555,11 @@ fn build_ast_from_pairs<'i, P: PluginBridge + Debug>(
                 trace!("AST build: Parsing processor content: {:?}", content_pair.as_str());
                 nodes.push(parse_processor_content::<P>(content_pair)?);
             }
+            Rule::mod_function => {
+                let content_pair = pairs.next().unwrap();
+                trace!("AST build: Parsing mod function content: {:?}", content_pair.as_str());
+                nodes.push(parse_mod_function_content::<P>(content_pair)?);
+            }
             Rule::trigger => {
                 let content_pair = pairs.next().unwrap();
                 trace!("AST build: Parsing trigger content: {:?}", content_pair.as_str());
@@ -610,6 +617,78 @@ fn build_ast_from_pairs<'i, P: PluginBridge + Debug>(
     Ok(nodes)
 }
 
+fn parse_mod_function_content<'i, P: PluginBridge + Debug>(
+    pair: Pair<'i, Rule>
+) -> Result<AstNode, ParserError> {
+    trace!("Parsing mod function content: {:?}", pair.as_str());
+    if pair.as_rule() != Rule::mod_function {
+        error!("Expected mod_function, got {:?}", pair.as_rule());
+        return Err(ParserError::Processing(format!("Expected mod_function, got {:?}", pair.as_rule())));
+    }
+    let raw_tag_string = pair.as_str().to_string();
+    let mut inner = pair.clone().into_inner();
+
+    let _start_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected mod_start in content".to_string()))?;
+    let name_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected mod_name in content".to_string()))?;
+    if name_pair.as_rule() != Rule::namespace_identifier {
+        error!("Expected mod_name, got {:?}", name_pair.as_rule());
+        return Err(ParserError::Processing(format!("Expected mod_name, got {:?}", name_pair.as_rule())));
+    }
+    let name = name_pair.as_str().to_string();
+    
+    // Get the parameters pair
+    let parameters_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected mod_parameters in content".to_string()))?;
+    if parameters_pair.as_rule() != Rule::parameters {
+        error!("Expected mod_parameters, got {:?}", parameters_pair.as_rule());
+        return Err(ParserError::Processing(format!("Expected mod_parameters, got {:?}", parameters_pair.as_rule())));
+    }
+
+    // Parse each parameter value
+    let mut parameters = Vec::new();
+    for param_pair_outer in parameters_pair.into_inner() {
+        // Each param_pair should be a property_value according to your grammar
+        if param_pair_outer.as_rule() != Rule::parameter_value {
+            error!("Expected property_value, got {:?}", param_pair_outer.as_rule());
+            return Err(ParserError::Processing(format!("Expected property_value, got {:?}", param_pair_outer.as_rule())));
+        }
+
+        let param_pair = param_pair_outer.clone().into_inner().next().ok_or_else(|| ParserError::Processing("Expected parameter in content".to_string()))?;
+
+        let param_node = match param_pair.as_rule() {
+            Rule::processor => parse_processor_content::<P>(param_pair)?,
+            Rule::variable => parse_variable_content::<P>(param_pair)?,
+            Rule::iterator_reference => parse_iterator_reference_content::<P>(param_pair)?,
+            Rule::array | Rule::object | Rule::literal | Rule::string_content | Rule::number => parse_property_value(param_pair)?,
+            _ => {
+                error!("Unexpected parameter type: {:?}", param_pair.as_rule());
+                return Err(ParserError::Processing(
+                    format!("Unexpected parameter type: {:?}", param_pair.as_rule())
+                ));
+            }
+        };
+        parameters.push(param_node);
+    }
+
+    // Check for the end tag
+    let _end_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected mod_end in content".to_string()))?;
+    if _end_pair.as_rule() != Rule::processor_end {
+        error!("Expected processor_end, got {:?}", _end_pair.as_rule());
+        return Err(ParserError::Processing(format!("Expected processor_end, got {:?}", _end_pair.as_rule())));
+    }
+
+    // Make sure there's nothing else
+    if inner.next().is_some() {
+        error!("Unexpected additional content in mod_function");
+        return Err(ParserError::Processing("Unexpected additional content in mod_function".to_string()));
+    }
+
+    // Return the completed ModFunction node with parameters
+    Ok(AstNode::ModFunction { 
+        name, 
+        parameters, 
+        raw_tag:raw_tag_string 
+    })
+}
 /// Parses a processor_tag_content pair.
 fn parse_processor_content<'i, P: PluginBridge + Debug>(
     pair: Pair<'i, Rule>,
@@ -624,7 +703,7 @@ fn parse_processor_content<'i, P: PluginBridge + Debug>(
 
     let _start_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected processor_start in content".to_string()))?;
     let name_pair = inner.next().ok_or_else(|| ParserError::Processing("Expected processor_name in content".to_string()))?;
-    if name_pair.as_rule() != Rule::processor_name {
+    if name_pair.as_rule() != Rule::namespace_identifier {
         error!("Expected processor_name, got {:?}", name_pair.as_rule());
         return Err(ParserError::Processing(format!("Expected processor_name, got {:?}", name_pair.as_rule())));
     }
@@ -1013,7 +1092,7 @@ fn parse_atomic_processor(pair: Pair<Rule>) -> Result<AstNode, ParserError> {
         return Err(ParserError::Processing(format!("Expected atomic processor_tag rule, got {:?}", pair.as_rule())));
     }
     let raw_tag = pair.as_str().to_string();
-    let content = raw_tag.trim_start_matches("@[")
+    let content = raw_tag.trim_start_matches("@![")
                             .trim_end_matches(']');
 
     let (name_str, props_str_opt) = match content.find('(') {
@@ -1302,6 +1381,7 @@ impl AstNode {
         match self {
             AstNode::Text(_) => "Text",
             AstNode::Processor { .. } => "Processor",
+            AstNode::ModFunction { .. } => "ModFunction",
             AstNode::Trigger { .. } => "Trigger",
             AstNode::Variable { .. } => "Variable",
             AstNode::MacroIf { .. } => "MacroIf",
@@ -1347,6 +1427,21 @@ fn resolve_single_node<P: PluginBridge + Debug>(
                         format!("Processor not found or instantiation failed (props: {:?})", resolved_props),
                     ))
                 }
+            }
+        }
+        AstNode::ModFunction { name, parameters, raw_tag } => {
+            warn!("Unimplemented. Temporarily returns an empty node");
+            trace!("Resolving ModFunction node '{}'", name);
+            let params = resolve_parameters(parameters, registry, entry_id, loop_context)?;
+            trace!("Resolved parameters for mod function '{}': {:?}. Raw tag: {}", name, params, raw_tag);
+
+            let return_value = registry.call_function(name, params)?;
+
+            trace!("Successfully called mod function '{}'. Return value: {:?}", name, return_value);
+
+            match return_value {
+                Value::Null => Ok(vec![ Box::new(EmptyNode {}) as Box<dyn WorldInfoNode> ]),
+                v => Ok(vec![ Box::new(TextNode { content: v.to_string() }) as Box<dyn WorldInfoNode> ]) // Literal return value
             }
         }
         AstNode::Variable { scope, name, .. } => {
@@ -1492,6 +1587,25 @@ fn resolve_properties_to_json<P: PluginBridge + Debug>(
     Ok(Value::Object(map))
 }
 
+/// Resolves a list of parameter AST nodes into a Vec<serde_json::Value>.
+fn resolve_parameters<P: PluginBridge + Debug>(
+    parameters: &[AstNode],
+    registry: &mut ScopedRegistry<P>,
+    entry_id: &String,
+    loop_context: Option<&HashMap<String, Value>>,
+) -> Result<Vec<Value>, ParserError> {
+    trace!("Entering resolve_parameters ({} parameters)", parameters.len());
+    let mut resolved_parameters = Vec::new();
+    for param_node in parameters {
+        trace!("Resolving parameter type {:?}", param_node.variant_name());
+        let resolved_value = resolve_property_value_to_json(param_node, registry, entry_id, loop_context)?;
+        trace!(" -> Resolved value: {:?}", resolved_value);
+        resolved_parameters.push(resolved_value);
+    }
+    trace!("Exiting resolve_parameters");
+    Ok(resolved_parameters)
+}
+
 /// Resolves a single property value AST node into a serde_json::Value.
 fn resolve_property_value_to_json<P: PluginBridge + Debug>(
     node: &AstNode,
@@ -1502,7 +1616,7 @@ fn resolve_property_value_to_json<P: PluginBridge + Debug>(
     trace!("Entering resolve_property_value_to_json for {:?}", node.variant_name());
     match node {
         // These nodes resolve by executing them and returning their string content
-        AstNode::Processor { .. } | AstNode::MacroIf { .. } | AstNode::MacroForeach { .. } | AstNode::Text { .. } | AstNode::Trigger { .. } => {
+        AstNode::Processor { .. } | AstNode::MacroIf { .. } | AstNode::MacroForeach { .. } | AstNode::Text { .. } | AstNode::Trigger { .. } | AstNode::ModFunction { .. } => {
             trace!("Resolving node {:?} within property to string content", node.variant_name());
             let resolved_nodes = resolve_single_node(node, registry, entry_id, loop_context)?;
             let mut combined_content = String::new();
@@ -1553,7 +1667,7 @@ fn resolve_property_value_to_json<P: PluginBridge + Debug>(
             trace!("Resolving NestedValue within property: {:?}", v);
             if let Value::String(s) = v {
                 // Check if the string itself contains tags that need evaluation
-                if s.contains("@[") || s.contains("<trigger") || s.contains("{{") || s.contains("{#") {
+                if s.contains("@[") || s.contains("@![") || s.contains("<trigger") || s.contains("{{") || s.contains("{#") {
                     debug!("String literal contains tags, re-parsing/evaluating: {:?}", s);
                     // Re-parse the string content as if it were top-level input
                     let inner_resolved_nodes = parse_and_evaluate(s, registry, entry_id, loop_context)?;
@@ -1639,8 +1753,8 @@ fn evaluate_expression<P: PluginBridge + Debug>(
 
             let processor_instance = registry.instantiate_processor(name, &resolved_props)
             .ok_or_else(|| {
-                 error!("Processor instantiation failed during expression evaluation for '{}' with props {:?}. Raw tag: {}", name, resolved_props, raw_tag);
-                 ParserError::ProcessorInstantiation( name.clone(),
+                error!("Processor instantiation failed during expression evaluation for '{}' with props {:?}. Raw tag: {}", name, resolved_props, raw_tag);
+                ParserError::ProcessorInstantiation( name.clone(),
                     format!("Processor '{}' not found or instantiation failed during expression evaluation (props: {:?})", name, resolved_props),
                 )
             })?;

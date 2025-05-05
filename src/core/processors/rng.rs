@@ -2,9 +2,7 @@ use std::sync::Arc;
 
 use rand::Rng;
 
-use crate::{WorldInfoNode, WorldInfoProcessor};
-
-use super::{PluginBridge, WorldInfoProcessorFactory};
+use crate::{registry::{PluginBridge, WorldInfoProcessorFactory}, WorldInfoNode, WorldInfoProcessor};
 
 #[derive(Debug, Clone)]
 pub struct RngProcessor {
@@ -44,7 +42,7 @@ impl WorldInfoProcessor for RngProcessor {
 pub struct RngProcessorFactory;
 
 impl<P: PluginBridge + 'static> WorldInfoProcessorFactory<P> for RngProcessorFactory {
-    fn create(&self, properties: &serde_json::Value, _bridge: &Arc<P>) -> Box<dyn WorldInfoProcessor> {
+    fn create(&self, properties: &serde_json::Value, _bridge: &Arc<P>) -> Box<dyn WorldInfoNode> {
         log::trace!("Creating rng processor");
         let raw_min = properties["min"].clone();
         let raw_max = properties["max"].clone();

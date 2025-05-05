@@ -2,9 +2,7 @@ use std::sync::Arc;
 
 use rand::Rng;
 
-use crate::{WorldInfoNode, WorldInfoProcessor};
-
-use super::{PluginBridge, WorldInfoProcessorFactory};
+use crate::{registry::{PluginBridge, WorldInfoProcessorFactory}, WorldInfoNode, WorldInfoProcessor};
 
 #[derive(Debug, Clone)]
 pub struct WildcardProcessor {
@@ -44,7 +42,7 @@ impl WorldInfoProcessor for WildcardProcessor {
 pub struct WildcardProcessorFactory;
 
 impl<P: PluginBridge + 'static> WorldInfoProcessorFactory<P> for WildcardProcessorFactory {
-    fn create(&self, properties: &serde_json::Value, _bridge: &Arc<P>) -> Box<dyn WorldInfoProcessor> {
+    fn create(&self, properties: &serde_json::Value, _bridge: &Arc<P>) -> Box<dyn WorldInfoNode> {
         log::trace!("Creating wildcard processor");
         let raw_items= properties["items"].as_array().unwrap();
         let mut items = Vec::new();

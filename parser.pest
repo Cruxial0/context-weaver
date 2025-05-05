@@ -1,21 +1,24 @@
 // Grammar for parsing text with embedded processors, triggers, variables, macros, and activation conditions.
 
 // --- Entry Point & Basic Structure ---
-input = { SOI ~ (macro_tag | processor | trigger | variable | text | WHITESPACE)* ~ EOI }
+input = { SOI ~ (macro_tag | processor | mod_function | trigger | variable | text | WHITESPACE)* ~ EOI }
 cond_input = { SOI ~ condition ~ EOI }
 
 // --- Whitespace and Comments (ignored in most places via `_`) ---
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 
 // --- Text Node ---
-text = @{ (!("@[" | "<trigger" | "{{" | "{#") ~ ANY)+ }
+text = @{ (!("@[" | "@![" | "<trigger" | "{{" | "{#") ~ ANY)+ }
 
 // --- Unified Processor Tag ---
 // Make non-atomic so AST builder can see inner parts
-processor = { processor_start ~ processor_name ~ ( "(" ~ properties? ~ ")" )? ~ processor_end }
-processor_start = @{ "@[" }
-processor_name = @{ identifier ~ ("." ~ identifier)* }
+processor = { processor_start ~ namespace_identifier ~ ( "(" ~ properties? ~ ")" )? ~ processor_end }
+processor_start = @{ "@![" }
 processor_end = @{ "]" }
+
+// Internal Functions
+mod_function_start = @{ "@[" }
+mod_function = { mod_function_start ~ namespace_identifier ~ "(" ~ parameters ~ ")" ~ processor_end }
 
 // --- Unified Trigger Tag ---
 // Make non-atomic
@@ -124,6 +127,10 @@ property_value = _{
     | literal   // Allow simple literals directly
 }
 
+// Parameters for functions
+parameter_value = { property_value | term | string_content }
+parameters = { parameter_value ~ (WHITESPACE* ~ "," ~ WHITESPACE* ~ parameter_value)* ~ WHITESPACE* }
+
 // --- Literals ---
 literal = _{ string | number | boolean | null }
 string = _{ quoted_string }
@@ -133,6 +140,7 @@ null = @{ "null" }
 
 // --- Reusable Primitives ---
 identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")*? }
+namespace_identifier = @{ identifier ~ ("." ~ identifier)* }
 quoted_string = _{ "\"" ~ string_content? ~ "\"" }
 string_content = @{ (escape | !("\"" | "\\") ~ ANY)+ }
 escape = { "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t" | "u" ~ ASCII_HEX_DIGIT{4}) }
