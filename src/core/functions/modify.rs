@@ -1,4 +1,6 @@
-use serde_json::{Number, Value};
+use std::collections::HashMap;
+
+use serde_json::{Map, Number, Value};
 
 use crate::{registry::{PluginBridge, ScopedRegistry, VariableResolver}, ParserError};
 
@@ -75,6 +77,14 @@ impl<P: PluginBridge> ModifyFunction<P> {
             Ok((a, b))
         } else {
             Err(ParserError::TypeMismatch(format!("Expected array, got {} and {}", variable, value)))
+        }
+    }
+
+    fn try_get_objects(&self, variable: Value, value: Value) -> Result<(Map<String, Value>, Map<String, Value>), ParserError> {
+        if let (Value::Object(a), Value::Object(b)) = (variable.clone(), value.clone()) {
+            Ok((a, b))
+        } else {
+            Err(ParserError::TypeMismatch(format!("Expected object, got {} and {}", variable, value)))
         }
     }
 
@@ -169,6 +179,39 @@ impl<P: PluginBridge> ModifyFunction<P> {
         a.retain(|v| v != &b);
         Ok(Value::Array(a))
     }
+
+    fn insert_object(&self, variable: Value, value: Value) -> Result<Value, ParserError> {
+        let (mut a, b) = self.try_get_objects(variable, value.clone())?;
+        if b.len() != 1 {
+            return Err(ParserError::TypeMismatch(format!("Expected object, got {}", value)));
+        }
+        a.extend(b);
+        Ok(Value::Object(a))
+    }
+
+    fn remove_object(&self, variable: Value, value: Value) -> Result<Value, ParserError> {
+        let (mut a, b) = self.try_get_objects(variable, value.clone())?;
+        a.retain(|k, _| !b.contains_key(k));
+        Ok(Value::Object(a))
+    }
+
+    fn merge_object(&self, variable: Value, value: Value) -> Result<Value, ParserError> {
+        let (mut a, b) = self.try_get_objects(variable, value.clone())?;
+        a.extend(b);
+        Ok(Value::Object(a))
+    }
+
+    fn modify_object(&self, variable: Value, value: Value) -> Result<Value, ParserError> {
+        let (mut a, b) = self.try_get_objects(variable, value.clone())?;
+        if b.len() != 1 {
+            return Err(ParserError::TypeMismatch(format!("Expected object, got {}", value)));
+        }
+        for (k, v) in b {
+            let val = a.get_mut(&k).ok_or(ParserError::TypeMismatch(format!("Expected object, got {}", value)))?;
+            *val = v;
+        }
+        Ok(Value::Object(a))
+    }
 }
 
 impl<P: PluginBridge> ModFunction<P> for ModifyFunction<P> {
@@ -198,6 +241,11 @@ impl<P: PluginBridge> ModFunction<P> for ModifyFunction<P> {
             ("extend", ParamType::All) => self.extend_array(variable, val),
             ("insert", ParamType::All) => self.insert_array(variable, val),
             ("remove", ParamType::All) => self.remove_array(variable, val),
+
+            ("insert", ParamType::Object) => self.insert_object(variable, val),
+            ("remove", ParamType::Object) => self.remove_object(variable, val),
+            ("merge", ParamType::Object) => self.merge_object(variable, val),
+            ("modify", ParamType::Object) => self.modify_object(variable, val),
 
             _ => Err(ParserError::UnsupportedOperation(format!("Operation {} not supported for type {}", op, value.param_type)))
         }?;

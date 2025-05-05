@@ -1,8 +1,9 @@
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::HashMap, sync::Arc};
 
     use rand::Rng;
+    use serde_json::json;
     use crate::{core::processors::{RngProcessorFactory, WildcardProcessorFactory}, id, registry::{PluginBridge, WorldInfoRegistry}, Context, ContextNode, EntryFactory, ParserError, WorldInfo, WorldInfoEntry, WorldInfoError, WorldInfoFactory};
 
     #[derive(Debug, Clone)]
@@ -298,20 +299,23 @@ mod tests {
 
         let registry = WorldInfoRegistry::new(Arc::new(DummyPluginBridge));
         registry.register_variable("global:counter".to_string(), 0.into());
+        registry.register_variable("global:object1".to_string(), json!({"key1": "value1"}).into());
+        registry.register_variable("global:object2".to_string(), json!({"key2": "value2"}).into());
 
         let mut worldinfo = WorldInfo::new(Box::new(registry));
         let entry = worldinfo.new_entry("test", 0);
 
         entry.set_text(r#"
+            @[modify("global:object1", "merge", {{global:object2}})]
             @[modify("global:counter", "add", 1)]
-            {{global:counter}}
+            {{global:counter}}: {{global:object1}}
         "#);
         entry.set_constant(true);
         entry.set_insertion_point("Default".to_string());
 
         let context = example_context();
         let evaluated_result = worldinfo.evaluate(example_context()).unwrap();
-        let possible_results = format!("{}\n{}", context.text(), 1);
+        let possible_results = format!("{}\n{}", context.text(), r#"1: {"key1":"value1","key2":"value2"}"#);
         println!("Evaluated result: {{\n{}\n}}", evaluated_result);
 
         assert_eq!(evaluated_result, possible_results);
