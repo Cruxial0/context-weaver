@@ -229,7 +229,7 @@ git clone https://github.com/Cruxial0/context-weaver.git
 
 - ✅ If-blocks  
 - ✅ Scoped variables  
-- ❌ Extended conditionals, variable mutation, piping
+- ✅ Extended conditionals, variable mutation, piping
 
 ### Syntax & Parsing
 
