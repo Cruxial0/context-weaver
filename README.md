@@ -1,253 +1,190 @@
 # ContextWeaver
 
-> **Warning:** This project is in an **early development** stage. Breaking changes will be frequent.
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-stable-orange.svg)]()
+[![Documentation](https://img.shields.io/badge/docs-latest-brightgreen.svg)]()
 
-**ContextWeaver** is a *(WIP)* framework for dynamically managing and injecting “lore” into text-generation contexts (e.g., LLM prompts, game scripts, dynamic UIs). It uses _entries_ with _activation conditions_ plus inline _processors_ to produce context-aware, procedurally generated text.
+> A dynamic and extensible text evaluation library for procedural content generation
 
----
+## 📖 Overview
 
-## ✨ Core Concepts
+**ContextWeaver** is a powerful Rust library that enables developers to seamlessly integrate a "lorebook" data structure into their applications. It provides a rich macro language for creating dynamic, procedural content that can be evaluated at runtime.
 
-1. **📄 Context Injection**  
-   Each entry contains a payload of text (“lore”) and one or more activation conditions. When a condition is met, that text is inserted into the target context (for example, an LLM prompt or chat history).  
-   _Activation conditions: see Roadmap._
+Whether you're building an LLM context system, text-based game, or prompt engine, ContextWeaver gives you the tools to create sophisticated text evaluation with conditional logic, variable substitution, and custom plugins.
 
-2. **⚙️ Dynamic Content via Processors**  
-   Entries can include inline “processors”—small snippets of logic that run at evaluation time and replace themselves with generated output. This makes your injected text dynamic rather than static.
+## 🚀 Key Features
 
----
+- **WorldInfo System**: Create collections of entries and documents that activate based on configurable conditions
+- **Rich Macro Language**: Build dynamic content with variables, conditionals, loops, and more
+- **Plugin Architecture**: Extend functionality with custom processors and functions
+- **Powerful Activation Logic**: Trigger content via keywords, regex patterns, or recursive activation
 
-## 💡 Processors
+## 🔧 Use Cases
 
-Processors embed procedural logic directly in your entries using a familiar, JSON-like syntax.
+- **LLM Context Management**: Define dynamic context sequences for large language models
+- **Text Game Systems**: Build character generators or procedural game elements
+- **Prompt Engines**: Create sophisticated, conditional prompt templates
+- **Any System Requiring Procedural Text**: Generate dynamic content based on state or conditions
 
-### Syntax
+## 🛠️ The Weaver Language
 
-- **Basic call:**  
-  ```text
-  @[weaver.core.rng(min: 0, max: 100)]
-  ```
-- **Pseudo-JSON properties** use unquoted keys and allow inline comments:
-  ```text
-  {
-    property: "value", // no quotes around property
-  }
-  ```
-- **Tag attributes:**  
-  ```html
-  <trigger id=0>
-  ```
+ContextWeaver's expression language combines simplicity with power. Built using [pest.rs](https://pest.rs/), it emphasizes component interchangeability - any component with a return value can be used virtually anywhere in your templates.
 
-### Example: Random Number
+### Core Components
 
-```text
-The generated number is: @[weaver.core.rng(min: 0, max: 100)]
+#### Variables
+
+```
+{{scope:variable}}
 ```
 
-→  
+Variables store and retrieve values within defined scopes. Currently supported scopes:
+- `global`: Accessible from all entries
+- `local`: Entry-specific variables (syntactic sugar for the entry's ID)
+
+#### Processors
+
 ```
-The generated number is: 73
-```
-
-### Nesting
-
-You can nest processors arbitrarily:
-
-```text
-@[weaver.core.wildcard(
-  items: [
-    "Weather: @[weaver.core.wildcard(items:[\"sunny\",\"cloudy\",\"rainy\"])]",
-    "Number: @[weaver.core.rng(min:0,max:100)]"
-  ]
-)]
+@![processor.name(property: value, another: "string")]
 ```
 
-**Evaluation steps:**
-1. **Inner processors** resolve first (e.g. picks `"cloudy"` or a random number).  
-2. **Outer wildcard** then picks among the now-concrete strings.
+Inline programs that execute custom logic. Built-in processors include:
 
----
+| Identifier          | Description                                  |
+|---------------------|----------------------------------------------|
+| core.weaver.rng     | Generates a random number                    |
+| core.weaver.wildcard| Picks one item at random from an input array |
 
-## 📝 Variables
+#### Macros
 
-Use variables to inject key-value data at evaluation time.
+Multi-line operations for control flow:
 
-- **Syntax:** `{{SCOPE:VAR_NAME}}`  
-- **Scopes:**  
-  - `global` — accessible everywhere  
-  - `ENTRY_ID` — only within that entry  
-- **Type note:** Types are inferred at runtime. Core processors handle mismatches gracefully, but custom logic should guard against bad types.
-
----
-
-## 🔄 Macros
-
-Macros let you write control flow in your entries. They live in `{# ... #}` blocks.
-
-### If-Macro
-
-```text
-{# if CONDITION #}
-  …true branch…
-{# else #}
-  …false branch…
+```
+{# if condition #}
+  content when condition is true
 {# endif #}
 ```
 
-- Supports binary and arithmetic operators, grouping, and variable interpolation.
-- Built-in helper functions:
-  | Function       | Input                 | Returns           |
-  | -------------- | --------------------- | ----------------- |
-  | `len(x)`       | String, List, HashMap | Integer length    |
-  | `contains(x,y)`| String/List & String  | Boolean membership|
-
-### Foreach-Macro
-
-```text
-{# foreach ITEM in COLLECTION #}
-  …use {{ITEM}}…
+```
+{# foreach item in array #}
+  content with {{item}}
 {# endforeach #}
 ```
 
-Iterate over lists, maps, or strings; collections may mix types.
+#### Functions
 
----
+```
+@[namespace.func(param1, param2)]
+```
+
+Functions modify the internal state of the WorldInfo, with access to the registry and variable scopes.
+
+#### Triggers
+
+```
+<trigger id="entry-id">
+```
+
+Deterministically activate another entry when this tag is encountered during evaluation.
+
+#### Documents (Work in Progress)
+
+```
+[[DOCUMENT_ID]]
+```
+
+Reusable content blocks that can be imported into entries.
 
 ## 🔌 Plugin Support
 
-Define your own processors via a _bridge interface_. Below is a Rust example.
+ContextWeaver is designed for extensibility, allowing you to add custom logic through processors and functions.
 
-### Bridge Trait (Rust)
+### Creating Custom Functions
+
+Implement the `ModFunction` trait to create your own functions:
 
 ```rust
-use context_weaver::core::processors::PluginBridge;
-use serde_json::Value;
+impl<P : PluginBridge> ModFunction<P> for YourCustomFunction<P> {
+    fn call(&self, args: Vec<Value>, registry: &ScopedRegistry<P>) -> Result<Value, ParserError> {
+        // Your implementation here
+    }
 
-struct MyBridge;
-
-impl PluginBridge for MyBridge {
-    type PluginId = u32;
-
-    fn invoke_plugin(
-        &self,
-        plugin_id: Self::PluginId,
-        properties: Value
-    ) -> Result<String, WorldInfoError> {
-        match plugin_id {
-            0 => dummy_logic(properties),
-            _ => Err(WorldInfoError::PluginError("Unknown plugin".into())),
-        }
+    fn signature(&self) -> (String, Vec<ParamSignature>) {
+        // Define your function signature
     }
 }
 ```
 
-### Dummy Plugin Logic
+### Creating Custom Processors
+
+Implement the `PluginBridge` trait to connect external logic to your processors:
 
 ```rust
-fn dummy_logic(props: Value) -> Result<String, WorldInfoError> {
-    // Parse input properties carefully
-    let items = props.get("items").and_then(Value::as_array)
-        .ok_or(WorldInfoError::PluginError("'items' missing".into()))?;
+impl PluginBridge for YourPluginBridge {
+    type PluginId = YourIdType;
 
-    let choice = items
-        .iter()
-        .filter_map(Value::as_str)
-        .choose(&mut rand::thread_rng())
-        .ok_or(WorldInfoError::PluginError("No valid items".into()))?;
-    Ok(format!("Forecast: {}", choice))
+    fn invoke_plugin(&self, plugin_id: Self::PluginId, properties: serde_json::Value) 
+        -> Result<String, WorldInfoError> {
+        // Your plugin invocation logic
+    }
 }
 ```
 
-### Register & Use
-
-```rust
-let registry = ProcessorRegistry::new(Arc::new(MyBridge));
-registry.register_plugin_processor("dummy", "forecast");
-
-let input = r#"@[weaver.plugin.dummy.forecast(
-  plugin_author:"dummy",
-  plugin_name:"forecast",
-  plugin_id:0,
-  plugin_data:{items:["sunny","rainy"]}
-)]"#;
-
-let mut wi = WorldInfo::new(Box::new(registry));
-wi.insert_entry(WorldInfoEntry::create("e1", 0).with_text(input));
-
-let result = wi.evaluate()?;
-println!("{}", result); // e.g. "Forecast: rainy"
-```
-
-> **Naming convention:** `weaver.plugin.<author>.<name>`
-
----
-
-## 🛠️ Installation
-
-#### Cargo
-
+## Installation
+### Cargo
 ```bash
 cargo add context-weaver
 ```
 
-#### From Source
-
+### Clone the repository
 ```bash
-git clone https://github.com/Cruxial0/context-weaver.git
-# Add to your Cargo.toml as a workspace member or dependency path
+git clone https://github.com/Cruxial0/context-weaver
+# Add a workspace reference to your Cargo.toml
 ```
-
----
-
-## 🚀 Usage Scenarios
-
-- **LLM prompt orchestration**  
-- **Text-based games:** random NPCs, scenarios  
-- **Dynamic UIs:** ComfyUI, AUTOMATIC1111 prompts  
-- **Any app** needing runtime-computed text
-
----
 
 ## 🚧 Roadmap
 
-### Processor & Activation
+| Feature                    | Status |
+|----------------------------|--------|
+| **Processor & Activation** |        |
+| Plugin support             | ✅     |
+| Various property types     | ✅     |
+| Documents                  | 🔄     |
+| Keyword/regex activation   | ✅     |
+| **Persistence**            |       |
+| JSON save/load of state    | 🔄     |
+| **Context Insertion**      |       |
+| Configurable strategies    | 🔄     |
+| **Macro & Templating**     |       |
+| If-blocks                  | ✅     |
+| Scoped variables           | ✅     |
+| Extended conditionals      | ✅     |
+| **Syntax & Parsing**       |       |
+| Pseudo-JSON via Pest       | ✅     |
+| Structured diagnostics     | ✅     |
 
-- ✅ Plugin support  
-- ✅ Various property types  
-- ❌ Documents ([[DOCUMENT_ID]])
-- ✅ Keyword/regex/recursive activation  
+## 📋 Language Syntax Overview
 
-### Persistence
-
-- ❌ JSON save/load of state
-
-### Context Insertion
-
-- ❌ Configurable strategies & frequency
-
-### Macro & Templating
-
-- ✅ If-blocks  
-- ✅ Scoped variables  
-- ✅ Extended conditionals, variable mutation, piping
-
-### Syntax & Parsing
-
-- ✅ Pseudo-JSON syntax via Pest  
-- ✅ Structured parsing & diagnostics  
-- ✅ Clear error messages  
-
-| Construct               | Syntax                                  | Supported |
-|-------------------------|-----------------------------------------|-----------|
-| Processor               | `@[processor.name(props)]`              | Yes       |
-| Trigger                 | `<trigger id=…>`                        | Yes       |
-| If-Macro                | `{# if … #}…{# endif #}`                | Yes       |
-| Foreach-Macro           | `{# foreach … #}…{# endforeach #}`      | Yes       |
-| Variable mutation       | `@[set]`, `@[modify]`, etc.             | No        |
-| Documents               | `[[DOCUMENT_ID]]`                       | Kinda (no)|
-
----
+| Construct      | Syntax                            | Status |
+|----------------|-----------------------------------|--------|
+| Variables      | `{{scope:variable}}`              | ✅     |
+| Processors     | `@![processor.name(props)]`       | ✅     |
+| Triggers       | `<trigger id="entry-id">`         | ✅     |
+| If-Macro       | `{# if ... #}...{# endif #}`      | ✅     |
+| Foreach-Macro  | `{# foreach ... #}...{# endforeach #}` | ✅ |
+| Functions      | `@[namespace.func(params)]`       | ✅     |
+| Documents      | `[[DOCUMENT_ID]]`                 | 🔄     |
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please open issues or PRs on the [GitHub repository](https://github.com/Cruxial0/context-weaver).
+Contributions are welcome! Please feel free to:
+
+- Open issues for bugs or feature requests
+- Submit pull requests with improvements
+- Share feedback on the documentation
+
+Visit the [GitHub repository](https://github.com/Cruxial0/context-weaver) to get involved.
+
+## 📄 License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
